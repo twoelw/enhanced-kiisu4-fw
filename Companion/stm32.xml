@@ -7,7 +7,7 @@
     <Revision>2</Revision>
   </ToolchainVersion>
   <BspID>com.sysprogs.arm.stm32</BspID>
-  <BspVersion>2025.01</BspVersion>
+  <BspVersion>2025.06</BspVersion>
   <McuID>STM32G431CB</McuID>
   <MCUDefinitionFile>STM32G4xxxx/DeviceDefinitions/stm32g431xx.xml</MCUDefinitionFile>
   <MCUProperties>
