@@ -35,7 +35,7 @@ project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 # Create an executable object type
-add_executable(${CMAKE_PROJECT_NAME} Core/Src/rw_sh1106.c Core/Inc/main.h Core/Src/rw_sh1106.h Core/Src/rw_hal.c Core/Src/rw_hal.h Core/Inc/board.h)
+add_executable(${CMAKE_PROJECT_NAME} Core/Src/rw_sh1106.c Core/Inc/main.h Core/Src/rw_sh1106.h Core/Src/rw_hal.c Core/Src/rw_hal.h Core/Inc/board.h Core/Src/rw_i2c_emu.c Core/Src/rw_i2c_emu.h)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)

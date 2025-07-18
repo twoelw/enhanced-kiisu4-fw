@@ -19,6 +19,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "rw_i2c_emu.h"
 #include "stm32g4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -27,6 +28,7 @@
 #include "stm32g4xx_ll_gpio.h"
 #include "stm32g4xx_ll_i2c.h"
 #include "stm32g4xx_ll_spi.h"
+
 #include <stdbool.h>
 /* USER CODE END Includes */
 
@@ -59,15 +61,8 @@
 /* USER CODE BEGIN 0 */
 uint8_t i2c_address = 0;
 uint8_t i2c_direction = 0;
-uint8_t i2c_55[256];
-uint8_t i2c_6b[256];
-uint8_t i2c_30[256];
 uint8_t i2c_pointer = 0;
 uint8_t i2c_register = 0;
-uint8_t i2c_6b_register = 0;
-
-volatile uint32_t i2cRxAdr = 0;
-volatile uint32_t i2cDataIndex = 0;
 
 
 /* USER CODE END 0 */
@@ -276,19 +271,7 @@ void I2C1_EV_IRQHandler(void)
       }
       else
       {
-        if (i2c_address == 0x6b)
-        {
-          i2c_6b[i2c_register++] = data;
-        }
-        if (i2c_address == 0x30)
-        {
-          i2c_30[i2c_register++] = data;
-        }
-        if (i2c_address == 0x55)       {
-          
-        i2c_55[i2c_register++] = data;    
-        
-        }
+        rw_i2c_reg_written(i2c_address, i2c_register++, data);     
       }
     }
     else
@@ -307,28 +290,13 @@ void I2C1_EV_IRQHandler(void)
   
   if (LL_I2C_IsActiveFlag_TXIS(I2C1))
   {
-    if (i2c_address == 0x6b)
-    {
-      LL_I2C_TransmitData8(I2C1, i2c_6b[i2c_register++]);
-    }
-    else if (i2c_address == 0x30)
-    {
-      LL_I2C_TransmitData8(I2C1, i2c_30[i2c_register++]);
-    }
-    else if (i2c_address == 0x55)
-    {
-      LL_I2C_TransmitData8(I2C1, i2c_55[i2c_register++]);
-    }
-
-    else
-      LL_I2C_TransmitData8(I2C1, i2c_register);
+      LL_I2C_TransmitData8(I2C1, rw_i2c_get_reg(i2c_address,i2c_register++));
     // Implement data sending logic here if needed
   }
 
   if (LL_I2C_IsActiveFlag_STOP(I2C1))
   {
     LL_I2C_ClearFlag_STOP(I2C1);
-    i2cDataIndex = 0; // Reset index after communication
     i2c_pointer = 0;
   }
   /* USER CODE END I2C1_EV_IRQn 0 */

@@ -26,6 +26,7 @@
 #include "stm32g4xx_ll_i2c.h"
 #include "stm32g4xx_ll_spi.h"
 #include "rw_sh1106.h"
+#include "rw_i2c_emu.h"
 
 /* USER CODE END Includes */
 
@@ -67,9 +68,6 @@ static void MX_SPI2_Init(void);
 
 int32_t power_counter = -500;
 
-extern uint8_t i2c_55[];
-extern uint8_t i2c_6b[];
-extern uint8_t i2c_30[];
 
 /* USER CODE END 0 */
 
@@ -96,7 +94,7 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  rw_i2c_emu_init();
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -130,7 +128,7 @@ int main(void)
     else
     {
       rw_chargeswitch(0);
-      if (i2c_30[14] == 0)
+      if (rw_i2c_get_backlight()== 0)
       {
         power_counter++;
       }
@@ -357,11 +355,6 @@ static void MX_I2C1_Init(void)
   LL_I2C_DisableGeneralCall(I2C1);
   LL_I2C_EnableClockStretching(I2C1);
   /* USER CODE BEGIN I2C1_Init 2 */
-  //LL_I2C_EnableGeneralCall(I2C1);
-  LL_I2C_DisableOwnAddress2(I2C1);
-
-  // LL_I2C_SetOwnAddress2(I2C1, 0, LL_I2C_OWNADDRESS2_MASK06);
-  // LL_I2C_EnableOwnAddress2(I2C1);
 
   LL_I2C_EnableIT_ADDR(I2C1);
   LL_I2C_EnableIT_ERR(I2C1);

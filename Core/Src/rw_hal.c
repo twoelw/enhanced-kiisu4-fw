@@ -20,9 +20,9 @@ void rw_read_adc()
   HAL_ADC_Start(&hadc1);
   // Poll ADC1 Perihperal & TimeOut = 1mSec
   HAL_ADC_PollForConversion(&hadc1, 1);
-  adc3 = HAL_ADC_GetValue(&hadc1);
+  adc3 = HAL_ADC_GetValue(&hadc1)/ 1.77;
   HAL_ADC_PollForConversion(&hadc1, 1);
-  adc_usb_raw = HAL_ADC_GetValue(&hadc1);
+  adc_usb_raw = HAL_ADC_GetValue(&hadc1) / 3.276;
   HAL_ADC_PollForConversion(&hadc1, 1);
   adc15 = HAL_ADC_GetValue(&hadc1);
 }
