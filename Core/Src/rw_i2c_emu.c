@@ -251,6 +251,28 @@ void rw_i2c_emu_init()
   //i2c_6b[0x0B] = 0b00111110; // charged
 }
 
+void rw_i2c_set_battery(int16_t vbatt,int16_t vusb,int16_t current, uint8_t charge_state) 
+{
+  if (charge_state == 0)
+  {
+    i2c_55[0x0A] = 0b00111011; // 1 bit - set when discarging
+    i2c_6b[0x0B] = 0b00000010; // not charging
+  }
+  else if (charge_state == 1)
+  {
+    i2c_55[0x0A] = 0b00111010; 
+    i2c_6b[0x0B] = 0b00110110; // charging
+  }
+  else if (charge_state == 2)
+  {
+    i2c_55[0x0A] = 0b00111110; // 
+    i2c_6b[0x0B] = 0b00111110; // charged
+  }
+  int_to_array(i2c_55, 0x08, vbatt); // voltage
+  int_to_array(i2c_55, 0x0C, current);   // current
+  int_to_array(i2c_55, 0x2C, (vbatt-3200)*100/(4200-3200));   // charge percentage 
+}
+
 void rw_i2c_reg_written(uint8_t address, uint8_t reg, uint8_t value)
 {
   if (address == 0x6b)

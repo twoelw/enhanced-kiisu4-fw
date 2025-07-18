@@ -117,16 +117,32 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    uint8_t charge_state = rw_chargestate();
     rw_read_adc();
     rw_led(0, 0, 0);
-    if (adc_usb_raw > 10000)
+    if (adc_usb > 4400)
     {
       rw_chargeswitch(1);
       power_counter = 0;
-      rw_led(0, 1, 0);
+      if (charge_state == 0)
+      {
+        rw_led(0, 0, 1); // blue, not charging
+        rw_i2c_set_battery(adc_vsys, adc_usb, 0, 0);
+      }
+      else if (charge_state == 1)
+      {
+        rw_led(1, 1, 0); // yellow, charginh
+        rw_i2c_set_battery(adc_vsys, adc_usb, 20, 1);
+      }
+      else if (charge_state == 2)
+      {
+        rw_led(0, 1, 0); // green, charged
+        rw_i2c_set_battery(adc_vsys, adc_usb, 0, 2);
+      }
     }
     else
     {
+      rw_i2c_set_battery(adc_vsys, 0, -20, 0);
       rw_chargeswitch(0);
       if (rw_i2c_get_backlight()== 0)
       {
@@ -137,7 +153,9 @@ int main(void)
         power_counter = 0;
       }
     }  
-    if (power_counter > 0){rw_led(1, 0, 0);}
+    if (power_counter > 0){
+      rw_led(1, 0, 0);//power off is coming
+    }
     if (power_counter > 50){rw_powerswitch(0);}
     HAL_Delay(100);
   }
@@ -227,8 +245,8 @@ static void MX_ADC1_Init(void)
   hadc1.Init.DMAContinuousRequests = DISABLE;
   hadc1.Init.Overrun = ADC_OVR_DATA_PRESERVED;
   hadc1.Init.OversamplingMode = ENABLE;
-  hadc1.Init.Oversampling.Ratio = ADC_OVERSAMPLING_RATIO_16;
-  hadc1.Init.Oversampling.RightBitShift = ADC_RIGHTBITSHIFT_2;
+  hadc1.Init.Oversampling.Ratio = ADC_OVERSAMPLING_RATIO_256;
+  hadc1.Init.Oversampling.RightBitShift = ADC_RIGHTBITSHIFT_6;
   hadc1.Init.Oversampling.TriggeredMode = ADC_TRIGGEREDMODE_SINGLE_TRIGGER;
   hadc1.Init.Oversampling.OversamplingStopReset = ADC_REGOVERSAMPLING_CONTINUED_MODE;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)

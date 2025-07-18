@@ -5,9 +5,9 @@
 #include "stdbool.h"
 #include "stm32g4xx_ll_spi.h"
 extern ADC_HandleTypeDef hadc1;
-uint32_t adc3=0;
-uint32_t adc_usb_raw=0;
-uint32_t adc15=0;
+uint32_t adc_vsys=0;
+uint32_t adc_usb=0;
+uint32_t adc_current=0;
 void rw_led(char r, char g, char b)
 {
   HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, !r);
@@ -20,11 +20,42 @@ void rw_read_adc()
   HAL_ADC_Start(&hadc1);
   // Poll ADC1 Perihperal & TimeOut = 1mSec
   HAL_ADC_PollForConversion(&hadc1, 1);
-  adc3 = HAL_ADC_GetValue(&hadc1)/ 1.77;
+  adc_vsys = HAL_ADC_GetValue(&hadc1)/ 1.77;
   HAL_ADC_PollForConversion(&hadc1, 1);
-  adc_usb_raw = HAL_ADC_GetValue(&hadc1) / 3.276;
+  adc_usb = HAL_ADC_GetValue(&hadc1) / 3.276;
   HAL_ADC_PollForConversion(&hadc1, 1);
-  adc15 = HAL_ADC_GetValue(&hadc1);
+  //not working in 4a and 4b
+  adc_current = HAL_ADC_GetValue(&hadc1);
+}
+
+uint8_t rw_chargestate(void) // 0 - not charging, 1 - charging, 2 - charged
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Pin = CHARGE_STATE_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(CHARGE_STATE_GPIO_Port, &GPIO_InitStruct);
+  HAL_Delay(1);
+  uint16_t pullup = HAL_GPIO_ReadPin(CHARGE_STATE_GPIO_Port, CHARGE_STATE_Pin);
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(CHARGE_STATE_GPIO_Port, &GPIO_InitStruct);
+  HAL_Delay(1);
+  uint16_t pulldown = HAL_GPIO_ReadPin(CHARGE_STATE_GPIO_Port, CHARGE_STATE_Pin);
+  if (pulldown == pullup)
+  {
+    if (pullup)
+    {
+      return 2;
+    }
+    else
+    {
+      return 1;
+    }
+  }
+  else
+  {
+    return 0;
+  }
 }
 
 void rw_chargeswitch(char state) 

@@ -45,7 +45,7 @@ extern "C" {
 /* USER CODE BEGIN Includes */
 #include "board.h"
 
-  /* USER CODE END Includes */
+/* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */

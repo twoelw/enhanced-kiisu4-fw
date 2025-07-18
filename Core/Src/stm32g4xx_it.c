@@ -19,7 +19,6 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "rw_i2c_emu.h"
 #include "stm32g4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -28,7 +27,7 @@
 #include "stm32g4xx_ll_gpio.h"
 #include "stm32g4xx_ll_i2c.h"
 #include "stm32g4xx_ll_spi.h"
-
+#include "rw_i2c_emu.h"
 #include <stdbool.h>
 /* USER CODE END Includes */
 
