@@ -350,8 +350,12 @@ static void MX_I2C1_Init(void)
   LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_I2C1);
 
   /* I2C1 interrupt Init */
-  NVIC_SetPriority(I2C1_EV_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),0, 0));
+  NVIC_SetPriority(I2C1_EV_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),2, 0)); // Changed from 0 to 2 to avoid conflicts with OLED
   NVIC_EnableIRQ(I2C1_EV_IRQn);
+  
+  /* Add Error Interrupt Priority */
+  NVIC_SetPriority(I2C1_ER_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),2, 0)); // New addition to avoid conflicts with OLED
+  NVIC_EnableIRQ(I2C1_ER_IRQn); // New addition to avoid conflicts with OLED
 
   /* USER CODE BEGIN I2C1_Init 1 */
 
