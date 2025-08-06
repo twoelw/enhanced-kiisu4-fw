@@ -66,8 +66,16 @@ static void MX_SPI2_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-int32_t power_counter = -500;
+// Add these variables for smooth breathing effect
+uint32_t breath_cycle_time = 0;
+uint8_t breath_phase = 0; // 0 = breathing in, 1 = breathing out, 2 = dark period
+uint32_t breath_phase_start = 0;
+uint8_t breath_brightness = 0;
 
+// Variables for smooth PWM
+uint32_t pwm_period = 100; // PWM period in ms
+uint32_t pwm_counter = 0;
+uint32_t pwm_last_update = 0;
 
 /* USER CODE END 0 */
 
@@ -115,7 +123,6 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-
     /* USER CODE BEGIN 3 */
     uint8_t charge_state = rw_chargestate();
     rw_read_adc();
@@ -123,7 +130,6 @@ int main(void)
     if (adc_usb > 4400)
     {
       rw_chargeswitch(1);
-      power_counter = 0;
       if (charge_state == 0)
       {
         rw_led(0, 0, 1); // blue, not charging
@@ -131,7 +137,7 @@ int main(void)
       }
       else if (charge_state == 1)
       {
-        rw_led(1, 1, 0); // yellow, charginh
+        rw_led(1, 1, 0); // yellow, charging
         rw_i2c_set_battery(adc_vsys, adc_usb, 20, 1);
       }
       else if (charge_state == 2)
@@ -140,23 +146,150 @@ int main(void)
         rw_i2c_set_battery(adc_vsys, adc_usb, 0, 2);
       }
     }
-    else
+    else // Not connected to USB
     {
       rw_i2c_set_battery(adc_vsys, 0, -20, 0);
       rw_chargeswitch(0);
-      if (rw_i2c_get_backlight()== 0)
+      
+      if (rw_i2c_get_backlight() == 0) // Backlight is off
       {
-        power_counter++;
+        // 3-second warning before entering idle
+        uint32_t warning_start = HAL_GetTick();
+        uint8_t warning_cancelled = 0;
+        
+        while (HAL_GetTick() - warning_start < 3000) // 3-second warning
+        {
+          // Rapid flashing red LED (100ms on, 100ms off)
+          if ((HAL_GetTick() % 200) < 100) {
+            rw_led(1, 0, 0); // Red on
+          } else {
+            rw_led(0, 0, 0); // Red off
+          }
+          
+          // Check if backlight turned back on (cancel warning)
+          if (rw_i2c_get_backlight() != 0) {
+            warning_cancelled = 1;
+            break;
+          }
+          
+          HAL_Delay(10); // Small delay to reduce CPU load
+        }
+        
+        // Turn off LED after warning
+        rw_led(0, 0, 0);
+        
+        // If warning wasn't cancelled, enter idle mode
+        if (!warning_cancelled) {
+          rw_display_off(); // Turn off display
+          
+          uint32_t idle_start_time = HAL_GetTick();
+          uint32_t auto_shutdown_time = 30 * 60 * 1000; // 30 minutes in ms
+          
+          // Variables for non-blocking PWM breathing effect
+          uint32_t cycle_start_time = HAL_GetTick();
+          uint32_t pwm_state_change_time = HAL_GetTick();
+          uint8_t pwm_state = 0; // 0 = off, 1 = on
+          uint32_t pwm_period_ms = 20; // 20ms period
+          
+          while (1) // Idle loop
+          {
+            // Check if backlight turned back on (exit idle)
+            if (rw_i2c_get_backlight() != 0) {
+              break;
+            }
+            
+            // Check for 30-minute auto-shutdown
+            if (HAL_GetTick() - idle_start_time >= auto_shutdown_time) {
+              // 10-second shutdown warning
+              uint32_t shutdown_warning_start = HAL_GetTick();
+              uint8_t shutdown_cancelled = 0;
+              
+              // Turn off breathing effect during warning
+              rw_led(0, 0, 0);
+              
+              while (HAL_GetTick() - shutdown_warning_start < 10000) // 10-second warning
+              {
+                // Rapid flashing red LED (100ms on, 100ms off)
+                if ((HAL_GetTick() % 200) < 100) {
+                  rw_led(1, 0, 0); // Red on
+                } else {
+                  rw_led(0, 0, 0); // Red off
+                }
+                
+                // Check if backlight turned back on (cancel shutdown)
+                if (rw_i2c_get_backlight() != 0) {
+                  shutdown_cancelled = 1;
+                  break;
+                }
+                
+                HAL_Delay(10); // Small delay to reduce CPU load
+              }
+              
+              // If shutdown wasn't cancelled, power off
+              if (!shutdown_cancelled) {
+                rw_powerswitch(0); // Power off the device
+              } else {
+                // Reset auto-shutdown timer if cancelled
+                idle_start_time = HAL_GetTick();
+                rw_led(0, 0, 0); // Turn off LED
+                // Re-initialize breathing variables after cancelling shutdown
+                cycle_start_time = HAL_GetTick();
+                pwm_state_change_time = HAL_GetTick();
+                pwm_state = 0;
+              }
+            }
+            
+            // Non-blocking PWM breathing effect for red LED
+            uint32_t current_time = HAL_GetTick();
+            uint32_t elapsed_in_cycle = (current_time - cycle_start_time) % 5000; // 5-second cycle
+            
+            // Calculate brightness based on time in cycle
+            uint32_t brightness = 0;
+            if (elapsed_in_cycle < 1500) {
+              // Ramp up: 0 to 2000 over 1500ms
+              brightness = (elapsed_in_cycle * 2000) / 1500;
+            } else if (elapsed_in_cycle < 3000) {
+              // Ramp down: 2000 to 0 over 1500ms
+              brightness = 2000 - ((elapsed_in_cycle - 1500) * 2000) / 1500;
+            }
+            // Else: 2000ms to 5000ms is darkness, brightness remains 0
+            
+            // Set minimum brightness threshold to ensure LED goes completely off
+            if (brightness < 50) { // Below 2.5% brightness, turn LED completely off
+              rw_led(0, 0, 0); // LED off
+            } else {
+              // Calculate the on-time in the PWM period (in ms)
+              uint32_t on_time_ms = (brightness * pwm_period_ms) / 2000;
+              
+              // Ensure minimum on-time for visible brightness
+              if (on_time_ms < 1) {
+                on_time_ms = 1; // Minimum 1ms on-time
+              }
+              
+              // Check if we need to change the PWM state
+              if (current_time - pwm_state_change_time >= (pwm_state ? on_time_ms : (pwm_period_ms - on_time_ms))) {
+                // Toggle PWM state
+                pwm_state = !pwm_state;
+                pwm_state_change_time = current_time;
+                
+                // Set LED based on new state
+                if (pwm_state) {
+                  rw_led(1, 0, 0); // Red on
+                } else {
+                  rw_led(0, 0, 0); // Red off
+                }
+              }
+            }
+            
+            HAL_Delay(1); // Small delay to reduce CPU load
+          }
+          
+          // Exiting idle mode - turn display back on
+          rw_display_on();
+          rw_led(0, 0, 0); // Ensure LED is off
+        }
       }
-      else
-      {
-        power_counter = 0;
-      }
-    }  
-    if (power_counter > 0){
-      rw_led(1, 0, 0);//power off is coming
     }
-    if (power_counter > 50){rw_powerswitch(0);}
     HAL_Delay(100);
   }
   /* USER CODE END 3 */
