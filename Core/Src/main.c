@@ -60,7 +60,7 @@ static void MX_I2C1_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
-
+void handle_back_button(void);  // Function declaration
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -73,7 +73,6 @@ uint32_t breath_phase_start = 0;
 uint8_t breath_brightness = 0;
 
 // Variables for smooth PWM
-uint32_t pwm_period = 100; // PWM period in ms
 uint32_t pwm_counter = 0;
 uint32_t pwm_last_update = 0;
 
@@ -124,6 +123,7 @@ int main(void)
   {
     /* USER CODE END WHILE */
     /* USER CODE BEGIN 3 */
+    handle_back_button();  // Check for shutdown sequence
     uint8_t charge_state = rw_chargestate();
     rw_read_adc();
     rw_led(0, 0, 0);
@@ -793,7 +793,52 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+void handle_back_button(void) {
+  static uint8_t press_count = 0;
+  static uint32_t last_press_time = 0;
+  static uint32_t press_start_time = 0;
+  static uint8_t button_state = 0; // 0 = released, 1 = pressed
+  uint8_t current_button_state = HAL_GPIO_ReadPin(BACK_BTN_GPIO_Port, BACK_BTN_Pin);
+  
+  // --- State change detection ---
+  // RISING EDGE (Button was just pressed)
+  if (current_button_state && !button_state) {
+    button_state = 1;
+    press_start_time = HAL_GetTick();
+    // Reset press count if there's a >1s gap between presses
+    if (HAL_GetTick() - last_press_time > 1000) {
+      press_count = 1;
+    } else {
+      press_count++;
+    }
+    last_press_time = HAL_GetTick();
+  }
+  // FALLING EDGE (Button was just released)
+  else if (!current_button_state && button_state) {
+    button_state = 0;
+  }
+  
+  // --- Action logic based on state ---
+  // Check for 4-press-and-hold shutdown sequence
+  if (press_count >= 4) {
+    if (button_state) { // Button is currently held down
+      if (HAL_GetTick() - press_start_time >= 3000) { // Held for 3 seconds
+        // Flash the red led for 2 seconds and shut down.
+        uint32_t shutdown_warning_start_time = HAL_GetTick();
+        while (HAL_GetTick() - shutdown_warning_start_time < 2000) {
+          rw_led(1, 0, 0); HAL_Delay(100);
+          rw_led(0, 0, 0); HAL_Delay(100);
+        }
+        rw_powerswitch(0);
+        // The device will now power off, so we hang here.
+        while (1);
+      }
+    } else { // Button was released
+      // This is a failed attempt (4 presses but no hold), so reset the counter.
+      press_count = 0;
+    }
+  }
+}
 /* USER CODE END 4 */
 
 /**
