@@ -132,12 +132,12 @@ int main(void)
       else if (charge_state == 1)
       {
         rw_led(1, 1, 0); // yellow, charginh
-        rw_i2c_set_battery(adc_vsys, adc_usb, 20, 1);
+        rw_i2c_set_battery(3700, adc_usb, 20, 1);
       }
       else if (charge_state == 2)
       {
         rw_led(0, 1, 0); // green, charged
-        rw_i2c_set_battery(adc_vsys, adc_usb, 0, 2);
+        rw_i2c_set_battery(4200, adc_usb, 0, 2);
       }
     }
     else
