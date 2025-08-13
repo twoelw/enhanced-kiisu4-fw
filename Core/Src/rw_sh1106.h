@@ -12,3 +12,5 @@ void rw_sh1106_setposition(uint8_t column, uint8_t row);
 
 void rw_sh1106_print(char *str);
 
+void rw_display_off(void);
+void rw_display_on(void);

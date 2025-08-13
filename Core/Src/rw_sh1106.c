@@ -430,3 +430,12 @@ uint8_t font[] = {
 	0x7C, 0x10, 0x38, 0x44, 0x38,
 	0x48, 0x34, 0x14, 0x14, 0x7C
 };
+void rw_display_off(void) // For idle modes
+{
+    _cmd(SH1106_DISPLAYOFF); // 0xAE
+}
+
+void rw_display_on(void)
+{
+    _cmd(SH1106_DISPLAYON); // 0xAF
+}
