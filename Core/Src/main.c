@@ -237,9 +237,6 @@ int main(void)
         if (!warning_cancelled) {
           rw_display_off(); // Turn off display
           
-          uint32_t idle_start_time = HAL_GetTick();
-          uint32_t auto_shutdown_time = 30 * 60 * 1000; // 30 minutes in ms
-          
           // Variables for non-blocking PWM breathing effect
           uint32_t cycle_start_time = HAL_GetTick();
           uint32_t pwm_state_change_time = HAL_GetTick();
@@ -251,53 +248,6 @@ int main(void)
             // Check if backlight turned back on (exit idle)
             if (rw_i2c_get_backlight() != 0) {
               break;
-            }
-            
-            // Check for 30-minute auto-shutdown
-            if (HAL_GetTick() - idle_start_time >= auto_shutdown_time) {
-              // 10-second shutdown warning
-              uint32_t shutdown_warning_start = HAL_GetTick();
-              uint8_t shutdown_cancelled = 0;
-              
-              // Turn off breathing effect during warning
-              rw_led(0, 0, 0);
-              
-              while (HAL_GetTick() - shutdown_warning_start < 10000) // 10-second warning
-              {
-                // Rapid flashing red LED (100ms on, 100ms off)
-                if ((HAL_GetTick() % 200) < 100) {
-                  rw_led(1, 0, 0); // Red on
-                } else {
-                  rw_led(0, 0, 0); // Red off
-                }
-                
-                // Check if backlight turned back on (cancel shutdown)
-                if (rw_i2c_get_backlight() != 0) {
-                  shutdown_cancelled = 1;
-                  break;
-                }
-                
-                HAL_Delay(10); // Small delay to reduce CPU load
-              }
-              
-              // If shutdown wasn't cancelled, power off
-              if (!shutdown_cancelled) {
-                rw_powerswitch(0); // Power off the device
-              } else {
-                // Reset auto-shutdown timer if cancelled
-                idle_start_time = HAL_GetTick();
-                rw_led(0, 0, 0); // Turn off LED
-                // Restore OLED brightness after cancelling shutdown
-                uint8_t current_backlight = rw_i2c_get_backlight();
-                if (current_backlight > 0) {
-                  rw_display_on();
-                  rw_display_set_brightness(current_backlight);
-                }
-                // Re-initialize breathing variables after cancelling shutdown
-                cycle_start_time = HAL_GetTick();
-                pwm_state_change_time = HAL_GetTick();
-                pwm_state = 0;
-              }
             }
             
             // Non-blocking PWM breathing effect for red LED
