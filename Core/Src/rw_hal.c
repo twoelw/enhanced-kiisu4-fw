@@ -111,19 +111,23 @@ void rw_sh1106_pins_set(bool cs, bool dc, bool rst)
 void rw_display_init(void)
 {
   rw_sh1106_init();
+  rw_display_drawing_start();
   rw_sh1106_fill(0);
   rw_sh1106_setposition(0, 0);
   rw_sh1106_print("Kiisu is starting...");
+  rw_display_drawing_end();
 }
 
 void display_test(void)
 {
+  rw_display_drawing_start();
   rw_sh1106_fill(0);
   for (int i = 0; i < 255; i++)
   {
     rw_sh1106_print("B");
     HAL_Delay(100);
   }
+  rw_display_drawing_end();
 
   rw_sh1106_pins_set(0, 0, 0);
   HAL_Delay(100);

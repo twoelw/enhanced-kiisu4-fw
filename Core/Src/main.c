@@ -76,6 +76,11 @@ uint8_t breath_brightness = 0;
 uint32_t pwm_counter = 0;
 uint32_t pwm_last_update = 0;
 
+// OLED brightness control
+uint8_t last_backlight_value = 255; // Initialize to max to ensure first update
+uint8_t oled_drawing_in_progress = 0; // Flag to prevent brightness changes during drawing
+uint32_t last_brightness_check = 0; // Timestamp for brightness checking
+
 /* USER CODE END 0 */
 
 /**
@@ -130,6 +135,25 @@ int main(void)
     if (adc_usb > 4400)
     {
       rw_chargeswitch(1);
+      
+      // OLED brightness control based on virtual backlight
+      // Only check brightness every 50ms to reduce conflicts with drawing
+      if (HAL_GetTick() - last_brightness_check >= 50) {
+        uint8_t current_backlight = rw_i2c_get_backlight();
+        if (current_backlight != last_backlight_value && !oled_drawing_in_progress) {
+          if (current_backlight == 0) {
+            // Backlight off - turn off OLED display completely
+            rw_display_off();
+          } else {
+            // Backlight on - ensure display is on and set brightness
+            rw_display_on();
+            rw_display_set_brightness(current_backlight);
+          }
+          last_backlight_value = current_backlight;
+        }
+        last_brightness_check = HAL_GetTick();
+      }
+      
       if (charge_state == 0)
       {
         rw_led(0, 0, 1); // blue, not charging
@@ -150,6 +174,24 @@ int main(void)
     {
       rw_i2c_set_battery(adc_vsys, 0, -20, 0);
       rw_chargeswitch(0);
+      
+      // OLED brightness control based on virtual backlight
+      // Only check brightness every 50ms to reduce conflicts with drawing
+      if (HAL_GetTick() - last_brightness_check >= 50) {
+        uint8_t current_backlight = rw_i2c_get_backlight();
+        if (current_backlight != last_backlight_value && !oled_drawing_in_progress) {
+          if (current_backlight == 0) {
+            // Backlight off - turn off OLED display completely
+            rw_display_off();
+          } else {
+            // Backlight on - ensure display is on and set brightness
+            rw_display_on();
+            rw_display_set_brightness(current_backlight);
+          }
+          last_backlight_value = current_backlight;
+        }
+        last_brightness_check = HAL_GetTick();
+      }
       
       if (rw_i2c_get_backlight() == 0) // Backlight is off
       {
@@ -232,6 +274,12 @@ int main(void)
                 // Reset auto-shutdown timer if cancelled
                 idle_start_time = HAL_GetTick();
                 rw_led(0, 0, 0); // Turn off LED
+                // Restore OLED brightness after cancelling shutdown
+                uint8_t current_backlight = rw_i2c_get_backlight();
+                if (current_backlight > 0) {
+                  rw_display_on();
+                  rw_display_set_brightness(current_backlight);
+                }
                 // Re-initialize breathing variables after cancelling shutdown
                 cycle_start_time = HAL_GetTick();
                 pwm_state_change_time = HAL_GetTick();
@@ -286,7 +334,13 @@ int main(void)
           
           // Exiting idle mode - turn display back on
           rw_display_on();
+          // Restore brightness based on current backlight value
+          uint8_t current_backlight = rw_i2c_get_backlight();
+          if (current_backlight > 0) {
+            rw_display_set_brightness(current_backlight);
+          }
           rw_led(0, 0, 0); // Ensure LED is off
+          last_backlight_value = current_backlight; // Update tracking variable
         }
       }
     }

@@ -14,3 +14,8 @@ void rw_sh1106_print(char *str);
 
 void rw_display_off(void);
 void rw_display_on(void);
+void rw_display_set_brightness(uint8_t brightness);
+
+// Drawing protection functions
+void rw_display_drawing_start(void);
+void rw_display_drawing_end(void);

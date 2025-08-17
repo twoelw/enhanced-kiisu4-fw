@@ -2,6 +2,9 @@
 #include "rw_sh1106.h"
 #include "main.h"
 
+// External drawing flag from main.c
+extern uint8_t oled_drawing_in_progress;
+
 #define SH1106_SETCONTRAST 0x81
 #define SH1106_DISPLAYALLON_RESUME 0xA4
 #define SH1106_DISPLAYALLON 0xA5
@@ -153,15 +156,18 @@ void rw_sh1106_char(char c)
 
 void rw_sh1106_print(char *str)
 {
+	rw_display_drawing_start();
 	int i = 0;
 	while ((str[i] > 0)&&(i < 256))
 	{
 		rw_sh1106_char(str[i++]);
 	}
+	rw_display_drawing_end();
 }
 
 void rw_sh1106_fill(uint8_t pattern)
 {
+	rw_display_drawing_start();
 	for (char row = 0; row < 8; row++)
 	{
 		rw_sh1106_setposition(0, row);
@@ -170,6 +176,7 @@ void rw_sh1106_fill(uint8_t pattern)
 			_data1(pattern);
 		}
 	}
+	rw_display_drawing_end();
 }
 
 uint8_t font[] = {
@@ -438,4 +445,162 @@ void rw_display_off(void) // For idle modes
 void rw_display_on(void)
 {
     _cmd(SH1106_DISPLAYON); // 0xAF
+}
+
+void rw_display_set_brightness(uint8_t brightness)
+{
+    // Wait for any ongoing drawing operations to complete
+    uint32_t timeout = HAL_GetTick() + 100; // 100ms timeout
+    while (oled_drawing_in_progress && HAL_GetTick() < timeout) {
+        HAL_Delay(1);
+    }
+    
+    // Brightness curve for 5% increments (Flipper Zero brightness steps)
+    // Starting from 5% with proven ultra-low settings up to 100% maximum
+    
+    if (brightness == 0) {
+        // Complete off - turn display off entirely
+        _cmd(SH1106_DISPLAYOFF); // 0xAE
+        return;
+    }
+    
+    // Ensure display is on
+    _cmd(SH1106_DISPLAYON); // 0xAF
+    
+    // Calculate percentage: brightness * 100 / 255
+    uint8_t percentage = (brightness * 100) / 255;
+    
+    // Map percentages to our proven brightness settings
+    if (percentage <= 5) {           // 5% - Ultra dim (our proven minimum)
+        _cmd(0x30); // 6.4V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0x01); // Contrast 1
+        _cmd(0xD9); _cmd(0x11); // Minimum pre-charge/discharge
+        _cmd(0xDB); _cmd(0x00); // Minimum VCOM
+        
+    } else if (percentage <= 10) {    // 10% - Very dim
+        _cmd(0x30); // 6.4V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0x02); // Contrast 2
+        _cmd(0xD9); _cmd(0x11); // Minimum pre-charge/discharge
+        _cmd(0xDB); _cmd(0x00); // Minimum VCOM
+        
+    } else if (percentage <= 15) {    // 15% - Dim
+        _cmd(0x30); // 6.4V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0x04); // Contrast 4
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x20); // Low VCOM
+        
+    } else if (percentage <= 20) {    // 20% - Low
+        _cmd(0x30); // 6.4V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0x08); // Contrast 8
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x25); // Low-medium VCOM
+        
+    } else if (percentage <= 25) {    // 25% - Low-medium
+        _cmd(0x31); // 7.4V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0x10); // Contrast 16
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x30); // Medium VCOM
+        
+    } else if (percentage <= 30) {    // 30% - Medium-low
+        _cmd(0x31); // 7.4V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0x18); // Contrast 24
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x30); // Medium VCOM
+        
+    } else if (percentage <= 35) {    // 35% - Medium
+        _cmd(0x31); // 7.4V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0x20); // Contrast 32
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else if (percentage <= 40) {    // 40% - Medium
+        _cmd(0x32); // 8.0V pump voltage (default)
+        _cmd(SH1106_SETCONTRAST); _cmd(0x30); // Contrast 48
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else if (percentage <= 45) {    // 45% - Medium-high
+        _cmd(0x32); // 8.0V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0x40); // Contrast 64
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else if (percentage <= 50) {    // 50% - Half brightness
+        _cmd(0x32); // 8.0V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0x60); // Contrast 96
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else if (percentage <= 55) {    // 55% - Above half
+        _cmd(0x32); // 8.0V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0x80); // Contrast 128
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else if (percentage <= 60) {    // 60% - Bright
+        _cmd(0x33); // 9.0V pump voltage (maximum)
+        _cmd(SH1106_SETCONTRAST); _cmd(0x90); // Contrast 144
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else if (percentage <= 65) {    // 65% - Bright
+        _cmd(0x33); // 9.0V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0xA0); // Contrast 160
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else if (percentage <= 70) {    // 70% - Very bright
+        _cmd(0x33); // 9.0V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0xB0); // Contrast 176
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else if (percentage <= 75) {    // 75% - Very bright
+        _cmd(0x33); // 9.0V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0xC0); // Contrast 192
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else if (percentage <= 80) {    // 80% - Near max
+        _cmd(0x33); // 9.0V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0xD0); // Contrast 208
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else if (percentage <= 85) {    // 85% - Near max
+        _cmd(0x33); // 9.0V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0xE0); // Contrast 224
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else if (percentage <= 90) {    // 90% - Very high
+        _cmd(0x33); // 9.0V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0xF0); // Contrast 240
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else if (percentage <= 95) {    // 95% - Almost max
+        _cmd(0x33); // 9.0V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0xFC); // Contrast 252
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+        
+    } else {                          // 100% - Maximum brightness
+        _cmd(0x33); // 9.0V pump voltage
+        _cmd(SH1106_SETCONTRAST); _cmd(0xFF); // Contrast 255 (maximum)
+        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
+        _cmd(0xDB); _cmd(0x35); // Normal VCOM
+    }
+}
+
+void rw_display_drawing_start(void)
+{
+    oled_drawing_in_progress = 1;
+}
+
+void rw_display_drawing_end(void)
+{
+    oled_drawing_in_progress = 0;
+    // Small delay to ensure any pending brightness changes can complete
+    HAL_Delay(1);
 }
