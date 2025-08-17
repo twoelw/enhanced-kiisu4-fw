@@ -61,6 +61,7 @@ static void MX_SPI1_Init(void);
 static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
 void handle_back_button(void);  // Function declaration
+void handle_shutdown_request(void);  // Clean shutdown function declaration
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -80,6 +81,9 @@ uint32_t pwm_last_update = 0;
 uint8_t last_backlight_value = 255; // Initialize to max to ensure first update
 uint8_t oled_drawing_in_progress = 0; // Flag to prevent brightness changes during drawing
 uint32_t last_brightness_check = 0; // Timestamp for brightness checking
+
+// Shutdown request queueing
+uint8_t shutdown_request_queued = 0; // Flag to indicate a shutdown was requested while USB connected
 
 /* USER CODE END 0 */
 
@@ -172,6 +176,15 @@ int main(void)
     }
     else // Not connected to USB
     {
+      // Check for queued shutdown request when USB is unplugged
+      if (shutdown_request_queued) {
+        // Execute the queued shutdown immediately
+        rw_led(0, 0, 0); // Turn off all LEDs
+        rw_display_off(); // Turn off display
+        rw_powerswitch(0); // Power off the device
+        while (1); // Hang here as device will power off
+      }
+      
       rw_i2c_set_battery(adc_vsys, 0, -20, 0);
       rw_chargeswitch(0);
       
@@ -847,6 +860,31 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void handle_shutdown_request(void) {
+  // Check if USB is connected (using same logic as main loop)
+  rw_read_adc(); // Update ADC readings
+  
+  if (adc_usb > 4400) {
+    // USB is connected - queue the shutdown request instead of executing immediately
+    shutdown_request_queued = 1;
+    return; // Don't shutdown now, wait for USB to be unplugged
+  }
+  
+  // USB not connected - proceed with immediate shutdown
+  // Clean shutdown without LED warnings - similar to battery disconnect
+  // Turn off all LEDs immediately
+  rw_led(0, 0, 0);
+  
+  // Turn off display
+  rw_display_off();
+  
+  // Power off the device
+  rw_powerswitch(0);
+  
+  // Hang here as device will power off
+  while (1);
+}
+
 void handle_back_button(void) {
   static uint8_t press_count = 0;
   static uint32_t last_press_time = 0;

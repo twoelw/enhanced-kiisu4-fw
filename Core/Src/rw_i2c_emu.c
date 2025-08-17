@@ -1,5 +1,9 @@
 
 #include "rw_i2c_emu.h"
+
+// External variables from main.c
+extern uint32_t adc_usb; // USB voltage reading
+
 uint8_t i2c_55[256];
 uint8_t i2c_6b[256];
 uint8_t i2c_30[256];
@@ -277,16 +281,24 @@ void rw_i2c_reg_written(uint8_t address, uint8_t reg, uint8_t value)
 {
   if (address == 0x6b)
   {
-	i2c_6b[reg] = value;
+    i2c_6b[reg] = value;
+    
+    // Check for shutdown signal (similar to BQ25896 BATFET_DIS)
+    // Register 0x09 with bit 5 set indicates battery disconnect/shutdown request
+    if (reg == 0x09 && (value & 0x20)) { // Check bit 5 (BATFET_DIS equivalent)
+      // Call external shutdown handler
+      extern void handle_shutdown_request(void);
+      handle_shutdown_request();
+    }
   }
   else if (address == 0x30)
   {
-	i2c_30[reg] = value;
+    i2c_30[reg] = value;
   }
   else if (address == 0x55)
   {
-	//i2c_55[reg] = value
-  addr_55_written(reg,value);
+    //i2c_55[reg] = value
+    addr_55_written(reg,value);
   }
 }
 
