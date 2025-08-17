@@ -5,6 +5,9 @@
 // External drawing flag from main.c
 extern uint8_t oled_drawing_in_progress;
 
+// External priority protection variable from main.c
+extern volatile uint8_t spi_display_critical_section;
+
 #define SH1106_SETCONTRAST 0x81
 #define SH1106_DISPLAYALLON_RESUME 0xA4
 #define SH1106_DISPLAYALLON 0xA5
@@ -57,20 +60,26 @@ uint8_t ssd1306_row = 0;
 
 void _cmd(uint8_t arg)
 {
+	rw_display_spi_critical_start();
 	rw_sh1106_pins_set(false, false, true); //cs dc rst
 	rw_sh1106_spi_write(&arg, 1);
+	rw_display_spi_critical_end();
 }
 
 void _data(uint8_t *data, size_t len)
 {
+	rw_display_spi_critical_start();
 	rw_sh1106_pins_set(false, true, true); //cs dc rst
 	rw_sh1106_spi_write(data, len);
+	rw_display_spi_critical_end();
 }
 
 void _data1(uint8_t arg)
 {
+	rw_display_spi_critical_start();
 	rw_sh1106_pins_set(false, true, true); //cs dc rst
 	rw_sh1106_spi_write(&arg, 1);
+	rw_display_spi_critical_end();
 }
 
 void rw_sh1106_init(void)
@@ -107,13 +116,16 @@ void rw_sh1106_init(void)
 	{ _cmd(0x9F); }
 	else 
 	{ _cmd(0xCF); }
-	_cmd(SH1106_SETPRECHARGE); // 0xd9
-	if (vccstate == SH1106_EXTERNALVCC) 
-	{ _cmd(0x22); }
-	else 
-	{ _cmd(0xF1); }
+	// Set the pump voltage (VPP) to the lowest supported value (6.4V) to reduce baseline brightness
+	_cmd(0x30); // Command 3: Set Pump voltage value = 6.4V (A1:A0=00)
+
+	// Use POR precharge/discharge timing (0x22) for a softer baseline; safe and per datasheet
+	_cmd(SH1106_SETPRECHARGE); // 0xD9
+	_cmd(0x22); // Dis-charge=2 DCLKs, Pre-charge=2 DCLKs
+
+	// Set VCOM deselect to POR 0x35 (typical), which is lower than previous 0x40 and reduces brightness slightly
 	_cmd(SH1106_SETVCOMDETECT); // 0xDB
-	_cmd(0x40);
+	_cmd(0x35);
 	_cmd(SH1106_DEACTIVATE_SCROLL);
 	_cmd(SH1106_DISPLAYALLON_RESUME); // 0xA4
 	_cmd(SH1106_NORMALDISPLAY); // 0xA6
@@ -439,168 +451,93 @@ uint8_t font[] = {
 };
 void rw_display_off(void) // For idle modes
 {
-    _cmd(SH1106_DISPLAYOFF); // 0xAE
+    rw_display_spi_critical_start();
+    rw_sh1106_pins_set(false, false, true); //cs dc rst
+    uint8_t cmd = SH1106_DISPLAYOFF;
+    rw_sh1106_spi_write(&cmd, 1);
+    rw_display_spi_critical_end();
 }
 
 void rw_display_on(void)
 {
-    _cmd(SH1106_DISPLAYON); // 0xAF
+    rw_display_spi_critical_start();
+    rw_sh1106_pins_set(false, false, true); //cs dc rst
+    uint8_t cmd = SH1106_DISPLAYON;
+    rw_sh1106_spi_write(&cmd, 1);
+    rw_display_spi_critical_end();
 }
 
 void rw_display_set_brightness(uint8_t brightness)
 {
-    // Wait for any ongoing drawing operations to complete
-    uint32_t timeout = HAL_GetTick() + 100; // 100ms timeout
-    while (oled_drawing_in_progress && HAL_GetTick() < timeout) {
-        HAL_Delay(1);
-    }
-    
-    // Brightness curve for 5% increments (Flipper Zero brightness steps)
-    // Starting from 5% with proven ultra-low settings up to 100% maximum
-    
-    if (brightness == 0) {
-        // Complete off - turn display off entirely
-        _cmd(SH1106_DISPLAYOFF); // 0xAE
-        return;
-    }
-    
-    // Ensure display is on
-    _cmd(SH1106_DISPLAYON); // 0xAF
-    
-    // Calculate percentage: brightness * 100 / 255
-    uint8_t percentage = (brightness * 100) / 255;
-    
-    // Map percentages to our proven brightness settings
-    if (percentage <= 5) {           // 5% - Ultra dim (our proven minimum)
-        _cmd(0x30); // 6.4V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0x01); // Contrast 1
-        _cmd(0xD9); _cmd(0x11); // Minimum pre-charge/discharge
-        _cmd(0xDB); _cmd(0x00); // Minimum VCOM
-        
-    } else if (percentage <= 10) {    // 10% - Very dim
-        _cmd(0x30); // 6.4V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0x02); // Contrast 2
-        _cmd(0xD9); _cmd(0x11); // Minimum pre-charge/discharge
-        _cmd(0xDB); _cmd(0x00); // Minimum VCOM
-        
-    } else if (percentage <= 15) {    // 15% - Dim
-        _cmd(0x30); // 6.4V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0x04); // Contrast 4
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x20); // Low VCOM
-        
-    } else if (percentage <= 20) {    // 20% - Low
-        _cmd(0x30); // 6.4V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0x08); // Contrast 8
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x25); // Low-medium VCOM
-        
-    } else if (percentage <= 25) {    // 25% - Low-medium
-        _cmd(0x31); // 7.4V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0x10); // Contrast 16
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x30); // Medium VCOM
-        
-    } else if (percentage <= 30) {    // 30% - Medium-low
-        _cmd(0x31); // 7.4V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0x18); // Contrast 24
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x30); // Medium VCOM
-        
-    } else if (percentage <= 35) {    // 35% - Medium
-        _cmd(0x31); // 7.4V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0x20); // Contrast 32
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else if (percentage <= 40) {    // 40% - Medium
-        _cmd(0x32); // 8.0V pump voltage (default)
-        _cmd(SH1106_SETCONTRAST); _cmd(0x30); // Contrast 48
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else if (percentage <= 45) {    // 45% - Medium-high
-        _cmd(0x32); // 8.0V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0x40); // Contrast 64
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else if (percentage <= 50) {    // 50% - Half brightness
-        _cmd(0x32); // 8.0V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0x60); // Contrast 96
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else if (percentage <= 55) {    // 55% - Above half
-        _cmd(0x32); // 8.0V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0x80); // Contrast 128
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else if (percentage <= 60) {    // 60% - Bright
-        _cmd(0x33); // 9.0V pump voltage (maximum)
-        _cmd(SH1106_SETCONTRAST); _cmd(0x90); // Contrast 144
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else if (percentage <= 65) {    // 65% - Bright
-        _cmd(0x33); // 9.0V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0xA0); // Contrast 160
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else if (percentage <= 70) {    // 70% - Very bright
-        _cmd(0x33); // 9.0V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0xB0); // Contrast 176
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else if (percentage <= 75) {    // 75% - Very bright
-        _cmd(0x33); // 9.0V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0xC0); // Contrast 192
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else if (percentage <= 80) {    // 80% - Near max
-        _cmd(0x33); // 9.0V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0xD0); // Contrast 208
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else if (percentage <= 85) {    // 85% - Near max
-        _cmd(0x33); // 9.0V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0xE0); // Contrast 224
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else if (percentage <= 90) {    // 90% - Very high
-        _cmd(0x33); // 9.0V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0xF0); // Contrast 240
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else if (percentage <= 95) {    // 95% - Almost max
-        _cmd(0x33); // 9.0V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0xFC); // Contrast 252
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-        
-    } else {                          // 100% - Maximum brightness
-        _cmd(0x33); // 9.0V pump voltage
-        _cmd(SH1106_SETCONTRAST); _cmd(0xFF); // Contrast 255 (maximum)
-        _cmd(0xD9); _cmd(0x22); // Normal pre-charge/discharge
-        _cmd(0xDB); _cmd(0x35); // Normal VCOM
-    }
+	// Wait for ongoing SPI/drawing to finish
+	uint32_t timeout = HAL_GetTick() + 200; // 200ms timeout
+	while ((spi_display_critical_section || oled_drawing_in_progress) && HAL_GetTick() < timeout) {
+		HAL_Delay(1);
+	}
+
+	// Enter SPI critical section
+	rw_display_spi_critical_start();
+
+	if (brightness == 0) {
+		// Turn display off entirely
+		_cmd(SH1106_DISPLAYOFF);
+		rw_display_spi_critical_end();
+		return;
+	}
+
+	// Ensure display is on
+	_cmd(SH1106_DISPLAYON);
+
+	// Map 0..255 to 0x01..0xFF with a stronger gamma curve for deeper low-end
+	// Gamma approximation: value^3 / (255^2)
+	uint32_t v = brightness;              // 0..255
+	uint32_t gamma = (v * v * v + 65025/2) / 65025; // rounded, still 0..255
+	uint8_t contrast = (gamma == 0 && brightness > 0) ? 1 : (uint8_t)gamma; // ensure nonzero when >0
+	if (brightness <= 8 && contrast < 1) contrast = 1; // ultra-dim floor
+
+	_cmd(SH1106_SETCONTRAST);
+	_cmd(contrast);
+
+	// Do NOT touch pump voltage, precharge, or VCOM here to avoid glitches
+
+	rw_display_spi_critical_end();
 }
 
 void rw_display_drawing_start(void)
 {
     oled_drawing_in_progress = 1;
+    // Also set the critical section to prevent any brightness changes
+    rw_display_spi_critical_start();
 }
 
 void rw_display_drawing_end(void)
 {
+    // Clear the critical section first
+    rw_display_spi_critical_end();
     oled_drawing_in_progress = 0;
     // Small delay to ensure any pending brightness changes can complete
     HAL_Delay(1);
+}
+
+/**
+ * @brief Start critical section for SPI display operations
+ *        This ensures brightness changes cannot interfere with display drawing
+ */
+void rw_display_spi_critical_start(void)
+{
+    // Disable interrupts briefly to make this atomic
+    __disable_irq();
+    spi_display_critical_section = 1;
+    __enable_irq();
+}
+
+/**
+ * @brief End critical section for SPI display operations
+ */
+void rw_display_spi_critical_end(void)
+{
+    // Disable interrupts briefly to make this atomic
+    __disable_irq();
+    spi_display_critical_section = 0;
+    __enable_irq();
 }

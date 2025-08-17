@@ -98,7 +98,8 @@ void rw_sh1106_spi_write(uint8_t* buf, uint32_t len)
   for (uint32_t i = 0; i < len; i++)
   {
     LL_SPI_TransmitData8(OLED_SPI, buf[i]);
-    while (LL_I2S_IsActiveFlag_BSY(OLED_SPI)){};
+  // Wait until SPI is not busy to avoid interleaving commands/data
+  while (LL_SPI_IsActiveFlag_BSY(OLED_SPI)) { }
   }
 }
 

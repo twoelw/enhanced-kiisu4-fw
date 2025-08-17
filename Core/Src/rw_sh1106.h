@@ -19,3 +19,10 @@ void rw_display_set_brightness(uint8_t brightness);
 // Drawing protection functions
 void rw_display_drawing_start(void);
 void rw_display_drawing_end(void);
+
+// Priority protection functions for SPI operations
+void rw_display_spi_critical_start(void);
+void rw_display_spi_critical_end(void);
+
+// External variable declarations
+extern volatile uint8_t spi_display_critical_section;

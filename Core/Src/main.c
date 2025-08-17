@@ -49,7 +49,8 @@
 ADC_HandleTypeDef hadc1;
 
 /* USER CODE BEGIN PV */
-
+// Global variables for display priority control - defined here, used by display functions
+volatile uint8_t spi_display_critical_section = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -62,6 +63,7 @@ static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
 void handle_back_button(void);  // Function declaration
 void handle_shutdown_request(void);  // Clean shutdown function declaration
+void rw_display_apply_brightness_change(uint8_t brightness);  // Safe brightness change function
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -77,10 +79,15 @@ uint8_t breath_brightness = 0;
 uint32_t pwm_counter = 0;
 uint32_t pwm_last_update = 0;
 
-// OLED brightness control
+// OLED brightness control with priority protection
 uint8_t last_backlight_value = 255; // Initialize to max to ensure first update
 uint8_t oled_drawing_in_progress = 0; // Flag to prevent brightness changes during drawing
 uint32_t last_brightness_check = 0; // Timestamp for brightness checking
+
+// Priority protection for SPI display operations
+uint8_t brightness_change_pending = 0; // Flag for pending brightness change
+uint8_t pending_brightness_value = 0; // Stored brightness value for pending change
+uint32_t brightness_change_requested_time = 0; // When the brightness change was requested
 
 // Shutdown request queueing
 uint8_t shutdown_request_queued = 0; // Flag to indicate a shutdown was requested while USB connected
@@ -140,21 +147,35 @@ int main(void)
     {
       rw_chargeswitch(1);
       
-      // OLED brightness control based on virtual backlight
+      // OLED brightness control with priority protection for SPI operations
       // Only check brightness every 50ms to reduce conflicts with drawing
       if (HAL_GetTick() - last_brightness_check >= 50) {
         uint8_t current_backlight = rw_i2c_get_backlight();
-        if (current_backlight != last_backlight_value && !oled_drawing_in_progress) {
-          if (current_backlight == 0) {
-            // Backlight off - turn off OLED display completely
-            rw_display_off();
+        
+        // Check if brightness has changed
+        if (current_backlight != last_backlight_value) {
+          // If SPI display operations are in critical section, queue the brightness change
+          if (spi_display_critical_section || oled_drawing_in_progress) {
+            brightness_change_pending = 1;
+            pending_brightness_value = current_backlight;
+            brightness_change_requested_time = HAL_GetTick();
           } else {
-            // Backlight on - ensure display is on and set brightness
-            rw_display_on();
-            rw_display_set_brightness(current_backlight);
+            // Safe to change brightness immediately
+            rw_display_apply_brightness_change(current_backlight);
+            last_backlight_value = current_backlight;
           }
-          last_backlight_value = current_backlight;
         }
+        
+        // Process any pending brightness changes if it's now safe and not too old
+        if (brightness_change_pending && !spi_display_critical_section && !oled_drawing_in_progress) {
+          // Only apply if the request is less than 500ms old to avoid stale changes
+          if (HAL_GetTick() - brightness_change_requested_time < 500) {
+            rw_display_apply_brightness_change(pending_brightness_value);
+            last_backlight_value = pending_brightness_value;
+          }
+          brightness_change_pending = 0;
+        }
+        
         last_brightness_check = HAL_GetTick();
       }
       
@@ -188,21 +209,35 @@ int main(void)
       rw_i2c_set_battery(adc_vsys, 0, -20, 0);
       rw_chargeswitch(0);
       
-      // OLED brightness control based on virtual backlight
+      // OLED brightness control with priority protection for SPI operations
       // Only check brightness every 50ms to reduce conflicts with drawing
       if (HAL_GetTick() - last_brightness_check >= 50) {
         uint8_t current_backlight = rw_i2c_get_backlight();
-        if (current_backlight != last_backlight_value && !oled_drawing_in_progress) {
-          if (current_backlight == 0) {
-            // Backlight off - turn off OLED display completely
-            rw_display_off();
+        
+        // Check if brightness has changed
+        if (current_backlight != last_backlight_value) {
+          // If SPI display operations are in critical section, queue the brightness change
+          if (spi_display_critical_section || oled_drawing_in_progress) {
+            brightness_change_pending = 1;
+            pending_brightness_value = current_backlight;
+            brightness_change_requested_time = HAL_GetTick();
           } else {
-            // Backlight on - ensure display is on and set brightness
-            rw_display_on();
-            rw_display_set_brightness(current_backlight);
+            // Safe to change brightness immediately
+            rw_display_apply_brightness_change(current_backlight);
+            last_backlight_value = current_backlight;
           }
-          last_backlight_value = current_backlight;
         }
+        
+        // Process any pending brightness changes if it's now safe and not too old
+        if (brightness_change_pending && !spi_display_critical_section && !oled_drawing_in_progress) {
+          // Only apply if the request is less than 500ms old to avoid stale changes
+          if (HAL_GetTick() - brightness_change_requested_time < 500) {
+            rw_display_apply_brightness_change(pending_brightness_value);
+            last_backlight_value = pending_brightness_value;
+          }
+          brightness_change_pending = 0;
+        }
+        
         last_brightness_check = HAL_GetTick();
       }
       
@@ -879,6 +914,21 @@ void handle_back_button(void) {
       // This is a failed attempt (4 presses but no hold), so reset the counter.
       press_count = 0;
     }
+  }
+}
+
+/**
+ * @brief Safely apply brightness change with proper priority handling
+ * @param brightness: The brightness value to apply (0-255)
+ */
+void rw_display_apply_brightness_change(uint8_t brightness) {
+  if (brightness == 0) {
+    // Backlight off - turn off OLED display completely
+    rw_display_off();
+  } else {
+    // Backlight on - ensure display is on and set brightness
+    rw_display_on();
+    rw_display_set_brightness(brightness);
   }
 }
 /* USER CODE END 4 */
