@@ -377,3 +377,17 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 }
 
 /* USER CODE END 1 */
+
+/**
+  * @brief This function handles TIM6 global interrupt and DAC underrun errors.
+  */
+void TIM6_DAC_IRQHandler(void)
+{
+  // Check update flag
+  if (TIM6->SR & TIM_SR_UIF)
+  {
+    TIM6->SR &= ~TIM_SR_UIF; // clear
+    extern void led_pwm_isr_step(void);
+    led_pwm_isr_step(); // run at 10 kHz
+  }
+}

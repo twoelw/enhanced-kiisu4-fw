@@ -286,9 +286,9 @@ void rw_i2c_reg_written(uint8_t address, uint8_t reg, uint8_t value)
     // Check for shutdown signal (similar to BQ25896 BATFET_DIS)
     // Register 0x09 with bit 5 set indicates battery disconnect/shutdown request
     if (reg == 0x09 && (value & 0x20)) { // Check bit 5 (BATFET_DIS equivalent)
-      // Call external shutdown handler
-      extern void handle_shutdown_request(void);
-      handle_shutdown_request();
+      // Queue shutdown to be handled in main loop context (avoid heavy work in ISR)
+      extern void queue_shutdown_request(void);
+      queue_shutdown_request();
     }
   }
   else if (address == 0x30)

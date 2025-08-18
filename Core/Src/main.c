@@ -27,6 +27,7 @@
 #include "stm32g4xx_ll_spi.h"
 #include "rw_sh1106.h"
 #include "rw_i2c_emu.h"
+#include "led_pwm.h"
 
 /* USER CODE END Includes */
 
@@ -60,6 +61,7 @@ static void MX_ADC1_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_SPI2_Init(void);
+static void MX_TIM6_Init(void);
 /* USER CODE BEGIN PFP */
 void handle_back_button(void);  // Function declaration
 void handle_shutdown_request(void);  // Clean shutdown function declaration
@@ -73,6 +75,8 @@ void rw_display_apply_brightness_change(uint8_t brightness);  // Safe brightness
 uint8_t last_backlight_value = 255; // Initialize to max to ensure first update
 uint8_t oled_drawing_in_progress = 0; // Flag to prevent brightness changes during drawing
 uint32_t last_brightness_check = 0; // Timestamp for brightness checking
+// Track last charge state to handle transitions (e.g., clear stale LED states)
+static uint8_t prev_charge_state = 0xFF;
 
 // Priority protection for SPI display operations
 uint8_t brightness_change_pending = 0; // Flag for pending brightness change
@@ -81,6 +85,17 @@ uint32_t brightness_change_requested_time = 0; // When the brightness change was
 
 // Shutdown request queueing
 uint8_t shutdown_request_queued = 0; // Flag to indicate a shutdown was requested while USB connected
+// Allow I2C ISR to queue shutdown without heavy work
+void queue_shutdown_request(void) {
+  shutdown_request_queued = 1;
+}
+
+// Debounce and transition helpers
+static uint8_t usb_connected_prev = 0;
+static uint32_t usb_transition_ms = 0;
+static uint8_t charge_state_raw_last = 0xFF;
+static uint32_t charge_state_change_ms = 0;
+static uint8_t last_effective_cs = 0;
 
 /* USER CODE END 0 */
 
@@ -116,11 +131,14 @@ int main(void)
   MX_I2C1_Init();
   MX_SPI1_Init();
   MX_SPI2_Init();
+  MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
   rw_powerswitch(1);
   HAL_Delay(200);
   rw_display_init();
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+  led_pwm_init();
+  led_pwm_enable_timer_mode();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -129,12 +147,24 @@ int main(void)
   {
     /* USER CODE END WHILE */
     /* USER CODE BEGIN 3 */
-    handle_back_button();  // Check for shutdown sequence
+  handle_back_button();  // Check for shutdown sequence
     uint8_t charge_state = rw_chargestate();
+    // Track raw charge_state changes for debounce
+    if (charge_state != charge_state_raw_last) {
+      charge_state_raw_last = charge_state;
+      charge_state_change_ms = HAL_GetTick();
+    }
     rw_read_adc();
-    rw_led(0, 0, 0);
-    if (adc_usb > 4400)
+  // Don't forcibly clear LED here; PWM or other effects manage it
+  if (adc_usb > 4400)
     {
+      // Detect USB attach
+      if (!usb_connected_prev) {
+        usb_connected_prev = 1;
+        usb_transition_ms = HAL_GetTick();
+        // Reset prev_charge_state so PWM path reinitializes cleanly
+        prev_charge_state = 0xFF;
+      }
       rw_chargeswitch(1);
       
       // OLED brightness control with priority protection for SPI operations
@@ -169,24 +199,86 @@ int main(void)
         last_brightness_check = HAL_GetTick();
       }
       
-      if (charge_state == 0)
+      // Apply a small debounce so we don't flash blue if the charger IC reports 0 briefly
+      uint8_t effective_cs = charge_state;
+      if (charge_state == 0) {
+        // Wait ~150ms before committing to blue if state is 0
+        if (HAL_GetTick() - charge_state_change_ms < 150) {
+          // If previous state was charging/charged, keep using that to avoid blue blip
+          if (prev_charge_state == 1 || prev_charge_state == 2) {
+            effective_cs = prev_charge_state;
+          }
+        }
+      }
+
+    uint8_t force_pwm_restart = 0;
+  if (effective_cs == 0)
       {
+        // Not charging: static blue. Turn off PWM helper so direct control owns LED.
+        led_pwm_disable();
+        // Only drive blue if PWM is disabled and pins are high (avoid brief conflict)
         rw_led(0, 0, 1); // blue, not charging
         rw_i2c_set_battery(adc_vsys, adc_usb, 0, 0);
       }
-      else if (charge_state == 1)
+      else if (effective_cs == 1)
       {
-        rw_led(1, 1, 0); // yellow, charginh
+        // Charging: clear any stale LED and enable PWM yellow synced to backlight
+        // Force all LED channels OFF (active-low -> high) on transition into PWM control
+        if (prev_charge_state != 1 && prev_charge_state != 2) {
+          GPIOC->BSRR = (LED_R_Pin | LED_G_Pin | LED_B_Pin);
+      force_pwm_restart = 1;
+        }
+        led_pwm_set_color(1, 1, 0);
         rw_i2c_set_battery(3700, adc_usb, 20, 1);
       }
-      else if (charge_state == 2)
+      else if (effective_cs == 2)
       {
-        rw_led(0, 1, 0); // green, charged
+        // Charged: clear any stale LED and enable PWM green synced to backlight
+        if (prev_charge_state != 1 && prev_charge_state != 2) {
+          GPIOC->BSRR = (LED_R_Pin | LED_G_Pin | LED_B_Pin);
+      force_pwm_restart = 1;
+        }
+        led_pwm_set_color(0, 1, 0);
         rw_i2c_set_battery(4200, adc_usb, 0, 2);
       }
+
+      // Update LED PWM duty immediately and continuously while USB is connected
+      // Snap to 5-step increments and apply gamma for perceptual linearity.
+      static uint16_t last_led_duty = 0xFFFF;
+  if (effective_cs == 1 || effective_cs == 2) {
+        // Slightly higher minimum at charge to ensure visible indicator when backlight=0
+        const uint16_t MIN_DUTY = 80; // visible floor while charging
+        uint8_t bl_now = rw_i2c_get_backlight();
+        // Snap to multiples of 5
+        bl_now = (uint8_t)((bl_now / 5) * 5);
+        uint16_t duty_now;
+        if (bl_now == 0) {
+          duty_now = MIN_DUTY;
+        } else if (bl_now >= 255) {
+          duty_now = 2000;
+        } else {
+          // gamma ~2.0 approx for speed
+          uint32_t bl_sq = (uint32_t)bl_now * (uint32_t)bl_now; // up to 65025
+          uint32_t gamma_scaled = (bl_sq + 127) / 255u; // ~bl^2/255, range 0..255
+          duty_now = (uint16_t)(MIN_DUTY + ((2000 - MIN_DUTY) * gamma_scaled) / 255u);
+        }
+        if (force_pwm_restart || duty_now != last_led_duty) {
+          led_pwm_set_duty_0_2000(duty_now);
+          last_led_duty = duty_now;
+        }
+      }
+  // Remember the effective state for use outside this block
+  last_effective_cs = effective_cs;
     }
     else // Not connected to USB
     {
+      if (usb_connected_prev) {
+        // USB just disconnected; reset tracking
+        usb_connected_prev = 0;
+        prev_charge_state = 0xFF;
+      }
+  // Disable PWM helper so warning/idle effects have exclusive LED control
+      led_pwm_disable();
       // Check for queued shutdown request when USB is unplugged
       if (shutdown_request_queued) {
         // Execute the queued shutdown immediately
@@ -231,7 +323,7 @@ int main(void)
         last_brightness_check = HAL_GetTick();
       }
       
-      if (rw_i2c_get_backlight() == 0) // Backlight is off
+  if (rw_i2c_get_backlight() == 0) // Backlight is off
       {
         // 3-second warning before entering idle
         uint32_t warning_start = HAL_GetTick();
@@ -239,6 +331,12 @@ int main(void)
         
         while (HAL_GetTick() - warning_start < 3000) // 3-second warning
         {
+          // If USB got attached, exit warning immediately and let main loop handle charging path
+          rw_read_adc();
+          if (adc_usb > 4400) {
+            break;
+          }
+
           // Rapid flashing red LED (100ms on, 100ms off)
           if ((HAL_GetTick() % 200) < 100) {
             rw_led(1, 0, 0); // Red on
@@ -270,6 +368,11 @@ int main(void)
           
           while (1) // Idle loop
           {
+            // Exit idle as soon as USB attaches; main loop will enter charging path with backlight=0
+            rw_read_adc();
+            if (adc_usb > 4400) {
+              break;
+            }
             // Check if backlight turned back on (exit idle)
             if (rw_i2c_get_backlight() != 0) {
               break;
@@ -320,19 +423,25 @@ int main(void)
             HAL_Delay(1); // Small delay to reduce CPU load
           }
           
-          // Exiting idle mode - turn display back on
-          rw_display_on();
-          // Restore brightness based on current backlight value
+          // Exiting idle mode - only turn display on if backlight > 0
           uint8_t current_backlight = rw_i2c_get_backlight();
           if (current_backlight > 0) {
+            rw_display_on();
             rw_display_set_brightness(current_backlight);
+          } else {
+            rw_display_off();
           }
           rw_led(0, 0, 0); // Ensure LED is off
           last_backlight_value = current_backlight; // Update tracking variable
         }
       }
     }
-    HAL_Delay(100);
+  // Tick LED PWM every iteration to keep timing smooth
+  led_pwm_tick(HAL_GetTick());
+  HAL_Delay(1);
+  // Track last charge state for transition handling
+  // Track last effective state, not raw, to keep debounce consistent
+  prev_charge_state = (adc_usb > 4400) ? last_effective_cs : 0;
   }
   /* USER CODE END 3 */
 }
@@ -708,6 +817,20 @@ static void MX_SPI2_Init(void)
 
   /* USER CODE END SPI2_Init 2 */
 
+}
+
+static void MX_TIM6_Init(void)
+{
+  // Configure TIM6 to 10 kHz update rate (0.1 ms per tick)
+  __HAL_RCC_TIM6_CLK_ENABLE();
+  TIM6->PSC = 79;      // 80 MHz / (79+1) = 1 MHz
+  TIM6->ARR = 99;      // 1 MHz / (99+1) = 10 kHz
+  TIM6->EGR = TIM_EGR_UG; // update registers
+  TIM6->DIER |= TIM_DIER_UIE; // enable update interrupt
+  // Set TIM6 to a lower priority than SPI/I2C to avoid blocking comms
+  NVIC_SetPriority(TIM6_DAC_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),5, 0));
+  NVIC_EnableIRQ(TIM6_DAC_IRQn);
+  TIM6->CR1 |= TIM_CR1_CEN; // start timer
 }
 
 /**
