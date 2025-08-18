@@ -69,16 +69,6 @@ void rw_display_apply_brightness_change(uint8_t brightness);  // Safe brightness
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-// Add these variables for smooth breathing effect
-uint32_t breath_cycle_time = 0;
-uint8_t breath_phase = 0; // 0 = breathing in, 1 = breathing out, 2 = dark period
-uint32_t breath_phase_start = 0;
-uint8_t breath_brightness = 0;
-
-// Variables for smooth PWM
-uint32_t pwm_counter = 0;
-uint32_t pwm_last_update = 0;
-
 // OLED brightness control with priority protection
 uint8_t last_backlight_value = 255; // Initialize to max to ensure first update
 uint8_t oled_drawing_in_progress = 0; // Flag to prevent brightness changes during drawing
