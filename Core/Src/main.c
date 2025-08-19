@@ -97,6 +97,43 @@ static uint8_t charge_state_raw_last = 0xFF;
 static uint32_t charge_state_change_ms = 0;
 static uint8_t last_effective_cs = 0;
 
+// USB intro color cycle animation state
+static uint8_t usb_intro_active = 0;       // 1 while running attach animation
+static uint32_t usb_intro_start_ms = 0;    // when animation started
+static uint16_t usb_intro_rd = 0, usb_intro_gd = 0, usb_intro_bd = 0; // current RGB (0..2000)
+
+// Helper: map a time offset (ms) to a simple RGB mask cycling the hue wheel
+// Sequence (6 segments per cycle): R -> R+G -> G -> G+B -> B -> B+R
+// Convert hue [0..3600) x10deg to approximate RGB duties 0..2000 (S=V=1)
+static inline void hue_to_rgb_duty(uint16_t h10, uint16_t* r, uint16_t* g, uint16_t* b)
+{
+  // sector = 0..5, f = 0..600 (x100)
+  uint16_t h = h10 % 3600;
+  uint16_t sector = h / 600; // 0..5
+  uint16_t f = h % 600;      // 0..599 (x10deg)
+  // scale to 0..2000
+  uint16_t up = (uint32_t)f * 2000 / 600;        // 0..2000
+  uint16_t down = 2000 - up;                     // 2000..0
+  switch (sector) {
+    case 0: *r = 2000; *g = up;   *b = 0;    break; // R->Y
+    case 1: *r = down; *g = 2000; *b = 0;    break; // Y->G
+    case 2: *r = 0;    *g = 2000; *b = up;  break; // G->C
+    case 3: *r = 0;    *g = down; *b = 2000; break; // C->B
+    case 4: *r = up;   *g = 0;    *b = 2000; break; // B->M
+    default:*r = 2000; *g = 0;    *b = down; break; // M->R
+  }
+}
+
+static inline uint32_t usb_target_color_mask(uint8_t effective_cs)
+{
+  if (effective_cs == 1) {
+    return LED_R_Pin | LED_G_Pin; // Yellow for charging
+  } else if (effective_cs == 2) {
+    return LED_G_Pin; // Green for charged
+  }
+  return 0; // no specific target
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -164,6 +201,9 @@ int main(void)
         usb_transition_ms = HAL_GetTick();
         // Reset prev_charge_state so PWM path reinitializes cleanly
         prev_charge_state = 0xFF;
+  // Start intro color cycle animation on USB attach
+  usb_intro_active = 1;
+  usb_intro_start_ms = HAL_GetTick();
       }
       rw_chargeswitch(1);
       
@@ -211,13 +251,47 @@ int main(void)
         }
       }
 
-    uint8_t force_pwm_restart = 0;
-  if (effective_cs == 0)
+  uint8_t force_pwm_restart = 0;
+    // Compute target color (if any) and handle intro animation
+    uint32_t target_mask = usb_target_color_mask(effective_cs);
+  uint8_t intro_override = 0;
+  uint8_t intro_just_finished = 0;
+    if (usb_intro_active) {
+      uint32_t elapsed_intro = HAL_GetTick() - usb_intro_start_ms;
+      // Smooth HSV-like hue cycle over 0..360deg per 1000 ms
+      uint16_t h10 = (uint16_t)((elapsed_intro % 1000) * 3600 / 1000); // 0..3599
+      uint16_t rd, gd, bd; hue_to_rgb_duty(h10, &rd, &gd, &bd);
+      // Remember current intro RGB; actual brightness scaling applied below with backlight duty
+      usb_intro_rd = rd; usb_intro_gd = gd; usb_intro_bd = bd;
+      // Apply unscaled first; will be updated by brightness scaling later in this loop
+      led_pwm_set_rgb_duty_0_2000(usb_intro_rd, usb_intro_gd, usb_intro_bd);
+      // Ensure all channels available during intro
+      led_pwm_set_color(1, 1, 1);
+      intro_override = 1;
+      // Stop criteria on second cycle at target hue vicinity (if known) or after 2s
+      if (elapsed_intro >= 1000) {
+        uint8_t at_target = 0;
+        if (target_mask == (LED_R_Pin | LED_G_Pin)) {
+          at_target = (rd > 1500 && gd > 1500 && bd < 200);
+        } else if (target_mask == LED_G_Pin) {
+          at_target = (gd > 1700 && rd < 200 && bd < 200);
+        }
+        if (at_target || elapsed_intro >= 2000) {
+          usb_intro_active = 0;
+          intro_override = 0; // normal path sets final color below
+          intro_just_finished = 1; // ensure we exit RGB mode and sync brightness
+        }
+      }
+    }
+      if (effective_cs == 0)
       {
-        // Not charging: static blue. Turn off PWM helper so direct control owns LED.
-        led_pwm_disable();
-        // Only drive blue if PWM is disabled and pins are high (avoid brief conflict)
-        rw_led(0, 0, 1); // blue, not charging
+        // Not charging: if intro is active, let it run; otherwise show static blue.
+        if (!usb_intro_active) {
+          // Turn off PWM helper so direct control owns LED.
+          led_pwm_disable();
+          // Only drive blue if PWM is disabled and pins are high (avoid brief conflict)
+          rw_led(0, 0, 1); // blue, not charging
+        }
         rw_i2c_set_battery(adc_vsys, adc_usb, 0, 0);
       }
       else if (effective_cs == 1)
@@ -228,7 +302,7 @@ int main(void)
           GPIOC->BSRR = (LED_R_Pin | LED_G_Pin | LED_B_Pin);
       force_pwm_restart = 1;
         }
-        led_pwm_set_color(1, 1, 0);
+        if (!intro_override) { led_pwm_set_color(1, 1, 0); }
         rw_i2c_set_battery(3700, adc_usb, 20, 1);
       }
       else if (effective_cs == 2)
@@ -238,14 +312,14 @@ int main(void)
           GPIOC->BSRR = (LED_R_Pin | LED_G_Pin | LED_B_Pin);
       force_pwm_restart = 1;
         }
-        led_pwm_set_color(0, 1, 0);
+        if (!intro_override) { led_pwm_set_color(0, 1, 0); }
         rw_i2c_set_battery(4200, adc_usb, 0, 2);
       }
 
       // Update LED PWM duty immediately and continuously while USB is connected
       // Snap to 5-step increments and apply gamma for perceptual linearity.
       static uint16_t last_led_duty = 0xFFFF;
-  if (effective_cs == 1 || effective_cs == 2) {
+      if (effective_cs == 1 || effective_cs == 2) {
         // Slightly higher minimum at charge to ensure visible indicator when backlight=0
         const uint16_t MIN_DUTY = 80; // visible floor while charging
         uint8_t bl_now = rw_i2c_get_backlight();
@@ -262,10 +336,41 @@ int main(void)
           uint32_t gamma_scaled = (bl_sq + 127) / 255u; // ~bl^2/255, range 0..255
           duty_now = (uint16_t)(MIN_DUTY + ((2000 - MIN_DUTY) * gamma_scaled) / 255u);
         }
-        if (force_pwm_restart || duty_now != last_led_duty) {
+        if (usb_intro_active) {
+          // Scale intro RGB by duty, but clamp to at least 50% brightness during intro
+          uint16_t used_duty = duty_now < 1000 ? 1000 : duty_now;
+          uint16_t r = (uint32_t)usb_intro_rd * used_duty / 2000u;
+          uint16_t g = (uint32_t)usb_intro_gd * used_duty / 2000u;
+          uint16_t b = (uint32_t)usb_intro_bd * used_duty / 2000u;
+          led_pwm_set_rgb_duty_0_2000(r, g, b);
+          // Track actual brightness request for later syncing
+          last_led_duty = duty_now;
+        } else if (force_pwm_restart || intro_just_finished || duty_now != last_led_duty) {
+          // Ensure we exit RGB mode when intro finishes and sync to normal brightness
           led_pwm_set_duty_0_2000(duty_now);
           last_led_duty = duty_now;
         }
+      } else if (usb_intro_active) {
+        // effective_cs == 0 but intro is active: still scale intro by backlight,
+        // with a minimum of 50% brightness for better visibility at low levels.
+        uint8_t bl_now = rw_i2c_get_backlight();
+        bl_now = (uint8_t)((bl_now / 5) * 5);
+        uint16_t duty_now;
+        if (bl_now == 0) {
+          duty_now = 0;
+        } else if (bl_now >= 255) {
+          duty_now = 2000;
+        } else {
+          // gamma ~2.0 approx for speed
+          uint32_t bl_sq = (uint32_t)bl_now * (uint32_t)bl_now; // up to 65025
+          uint32_t gamma_scaled = (bl_sq + 127) / 255u; // ~bl^2/255, range 0..255
+          duty_now = (uint16_t)((2000 * gamma_scaled) / 255u);
+        }
+        uint16_t used_duty = duty_now < 1000 ? 1000 : duty_now;
+        uint16_t r = (uint32_t)usb_intro_rd * used_duty / 2000u;
+        uint16_t g = (uint32_t)usb_intro_gd * used_duty / 2000u;
+        uint16_t b = (uint32_t)usb_intro_bd * used_duty / 2000u;
+        led_pwm_set_rgb_duty_0_2000(r, g, b);
       }
   // Remember the effective state for use outside this block
   last_effective_cs = effective_cs;
@@ -329,12 +434,29 @@ int main(void)
         uint32_t warning_start = HAL_GetTick();
         uint8_t warning_cancelled = 0;
         
+        // Debounce helper for USB attach during warning
+        uint32_t usb_attach_start_warning = 0;
+        uint32_t last_usb_poll_warning = HAL_GetTick();
         while (HAL_GetTick() - warning_start < 3000) // 3-second warning
         {
           // If USB got attached, exit warning immediately and let main loop handle charging path
-          rw_read_adc();
-          if (adc_usb > 4400) {
-            break;
+          if (HAL_GetTick() - last_usb_poll_warning >= 50) { // poll USB ~20Hz
+            last_usb_poll_warning = HAL_GetTick();
+            rw_read_adc();
+            if (adc_usb > 4400) {
+              if (usb_attach_start_warning == 0) {
+                usb_attach_start_warning = HAL_GetTick();
+              } else if (HAL_GetTick() - usb_attach_start_warning >= 80) { // 80ms debounce
+                break;
+              }
+            } else {
+              usb_attach_start_warning = 0;
+            }
+          }
+
+          // If a shutdown was requested while warning, perform immediate clean shutdown
+          if (shutdown_request_queued) {
+            handle_shutdown_request();
           }
 
           // Rapid flashing red LED (100ms on, 100ms off)
@@ -359,66 +481,55 @@ int main(void)
         // If warning wasn't cancelled, enter idle mode
         if (!warning_cancelled) {
           rw_display_off(); // Turn off display
-          
-          // Variables for non-blocking PWM breathing effect
+
+          // Configure LED PWM for smooth, non-blocking breathing (ISR-driven)
+          // Set color to RED once; we only update duty over time
+          led_pwm_set_color(1, 0, 0);
           uint32_t cycle_start_time = HAL_GetTick();
-          uint32_t pwm_state_change_time = HAL_GetTick();
-          uint8_t pwm_state = 0; // 0 = off, 1 = on
-          uint32_t pwm_period_ms = 20; // 20ms period
           
+          // Debounce helper for USB attach during idle loop
+          uint32_t usb_attach_start_idle = 0;
+          uint32_t last_usb_poll_idle = HAL_GetTick();
           while (1) // Idle loop
           {
             // Exit idle as soon as USB attaches; main loop will enter charging path with backlight=0
-            rw_read_adc();
-            if (adc_usb > 4400) {
-              break;
+            if (HAL_GetTick() - last_usb_poll_idle >= 50) { // poll USB ~20Hz
+              last_usb_poll_idle = HAL_GetTick();
+              rw_read_adc();
+              if (adc_usb > 4400) {
+                if (usb_attach_start_idle == 0) {
+                  usb_attach_start_idle = HAL_GetTick();
+                } else if (HAL_GetTick() - usb_attach_start_idle >= 80) { // 80ms debounce
+                  break;
+                }
+              } else {
+                usb_attach_start_idle = 0;
+              }
+            }
+
+            // If a shutdown was requested while idling, perform immediate clean shutdown
+            if (shutdown_request_queued) {
+              handle_shutdown_request();
             }
             // Check if backlight turned back on (exit idle)
             if (rw_i2c_get_backlight() != 0) {
               break;
             }
             
-            // Non-blocking PWM breathing effect for red LED
+            // Smooth breathing: update PWM duty only; ISR handles toggling
             uint32_t current_time = HAL_GetTick();
             uint32_t elapsed_in_cycle = (current_time - cycle_start_time) % 5000; // 5-second cycle
-            
-            // Calculate brightness based on time in cycle
-            uint32_t brightness = 0;
+            uint16_t duty = 0; // 0..2000
             if (elapsed_in_cycle < 1500) {
-              // Ramp up: 0 to 2000 over 1500ms
-              brightness = (elapsed_in_cycle * 2000) / 1500;
+              duty = (uint16_t)((elapsed_in_cycle * 2000) / 1500); // ramp up
             } else if (elapsed_in_cycle < 3000) {
-              // Ramp down: 2000 to 0 over 1500ms
-              brightness = 2000 - ((elapsed_in_cycle - 1500) * 2000) / 1500;
-            }
-            // Else: 2000ms to 5000ms is darkness, brightness remains 0
-            
-            // Set minimum brightness threshold to ensure LED goes completely off
-            if (brightness < 50) { // Below 2.5% brightness, turn LED completely off
-              rw_led(0, 0, 0); // LED off
+              duty = (uint16_t)(2000 - ((elapsed_in_cycle - 1500) * 2000) / 1500); // ramp down
             } else {
-              // Calculate the on-time in the PWM period (in ms)
-              uint32_t on_time_ms = (brightness * pwm_period_ms) / 2000;
-              
-              // Ensure minimum on-time for visible brightness
-              if (on_time_ms < 1) {
-                on_time_ms = 1; // Minimum 1ms on-time
-              }
-              
-              // Check if we need to change the PWM state
-              if (current_time - pwm_state_change_time >= (pwm_state ? on_time_ms : (pwm_period_ms - on_time_ms))) {
-                // Toggle PWM state
-                pwm_state = !pwm_state;
-                pwm_state_change_time = current_time;
-                
-                // Set LED based on new state
-                if (pwm_state) {
-                  rw_led(1, 0, 0); // Red on
-                } else {
-                  rw_led(0, 0, 0); // Red off
-                }
-              }
+              duty = 0; // dark phase for 2s
             }
+            // Avoid barely-on flicker near zero
+            if (duty < 30) duty = 0;
+            led_pwm_set_duty_0_2000(duty);
             
             HAL_Delay(1); // Small delay to reduce CPU load
           }
@@ -431,7 +542,9 @@ int main(void)
           } else {
             rw_display_off();
           }
-          rw_led(0, 0, 0); // Ensure LED is off
+          // Ensure LED is off and PWM disabled after idle
+          led_pwm_disable();
+          rw_led(0, 0, 0);
           last_backlight_value = current_backlight; // Update tracking variable
         }
       }

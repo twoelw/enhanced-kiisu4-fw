@@ -17,3 +17,6 @@ void led_pwm_tick(uint32_t now_ms);
 // Optional ISR-driven mode
 void led_pwm_isr_step(void); // call from a periodic timer ISR (e.g., 2 kHz)
 void led_pwm_enable_timer_mode(void); // prefer ISR mode over main-loop tick
+
+// New: per-channel duty (0..2000 each). Enables RGB mode until global duty is set again.
+void led_pwm_set_rgb_duty_0_2000(uint16_t r, uint16_t g, uint16_t b);
