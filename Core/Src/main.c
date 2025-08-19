@@ -52,6 +52,10 @@ ADC_HandleTypeDef hadc1;
 /* USER CODE BEGIN PV */
 // Global variables for display priority control - defined here, used by display functions
 volatile uint8_t spi_display_critical_section = 0;
+// Startup LED one-shot purple breath state
+static uint8_t startup_breath_active = 0;    // 1 while performing the single breath
+static uint32_t startup_breath_t0 = 0;       // start time (ms)
+static uint8_t startup_breath_phase = 0;     // 0 = ramp up, 1 = ramp down, 2 = done
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -176,6 +180,18 @@ int main(void)
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
   led_pwm_init();
   led_pwm_enable_timer_mode();
+  // Decide if we should run the one-shot startup purple breath:
+  // Skip only when USB is attached (charging LEDs manage the state). We avoid
+  // using rw_chargestate() at boot to prevent transient misreads.
+  rw_read_adc();
+  if (!(adc_usb > 4400)) {
+    startup_breath_active = 1;
+    startup_breath_phase = 0;
+    startup_breath_t0 = HAL_GetTick();
+    // Prepare PWM in purple (R+B); duty will be modulated non-blocking in the main loop
+    led_pwm_set_color(1, 0, 1);
+    led_pwm_set_duty_0_2000(0);
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -195,6 +211,8 @@ int main(void)
   // Don't forcibly clear LED here; PWM or other effects manage it
   if (adc_usb > 4400)
     {
+  // Any USB attach cancels startup breath to avoid conflicts with USB LED logic
+  startup_breath_active = 0;
       // Detect USB attach
       if (!usb_connected_prev) {
         usb_connected_prev = 1;
@@ -382,8 +400,10 @@ int main(void)
         usb_connected_prev = 0;
         prev_charge_state = 0xFF;
       }
-  // Disable PWM helper so warning/idle effects have exclusive LED control
-      led_pwm_disable();
+  // Keep PWM enabled if startup breath is running; otherwise disable so other effects own the LED
+      if (!startup_breath_active) {
+        led_pwm_disable();
+      }
       // Check for queued shutdown request when USB is unplugged
       if (shutdown_request_queued) {
         // Execute the queued shutdown immediately
@@ -393,7 +413,7 @@ int main(void)
         while (1); // Hang here as device will power off
       }
       
-      rw_i2c_set_battery(adc_vsys, 0, -20, 0);
+  rw_i2c_set_battery(adc_vsys, 0, -20, 0);
       rw_chargeswitch(0);
       
       // OLED brightness control with priority protection for SPI operations
@@ -428,7 +448,44 @@ int main(void)
         last_brightness_check = HAL_GetTick();
       }
       
-  if (rw_i2c_get_backlight() == 0) // Backlight is off
+  // Run the one-shot startup purple breath (non-blocking) when not on USB and not charging/charged
+      if (startup_breath_active) {
+  // Single smooth breath in/out over ~2s (1.0s up, 1.0s down)
+        uint32_t now = HAL_GetTick();
+        uint32_t elapsed = now - startup_breath_t0;
+        uint16_t duty = 0;
+        if (startup_breath_phase == 0) {
+          // Ramp up 0 -> 2000 in 1000 ms
+          if (elapsed >= 1000) {
+            duty = 2000;
+            startup_breath_phase = 1;
+            startup_breath_t0 = now;
+          } else {
+            duty = (uint16_t)((elapsed * 2000u) / 1000u);
+          }
+        }
+        if (startup_breath_phase == 1) {
+          uint32_t down_ms = now - startup_breath_t0;
+          if (down_ms >= 1000) {
+            duty = 0;
+            startup_breath_phase = 2; // done
+          } else {
+            duty = (uint16_t)(2000u - ((down_ms * 2000u) / 1000u));
+          }
+        }
+        // Avoid barely-on flicker
+        if (duty < 30) duty = (startup_breath_phase == 2) ? 0 : 30;
+        led_pwm_set_color(1, 0, 1); // purple (R+B)
+        led_pwm_set_duty_0_2000(duty);
+        if (startup_breath_phase == 2) {
+          // Finish: release PWM ownership and turn LED fully off
+          led_pwm_disable();
+          rw_led(0, 0, 0);
+          startup_breath_active = 0;
+        }
+      }
+
+  if (!startup_breath_active && rw_i2c_get_backlight() == 0) // Backlight is off
       {
         // 3-second warning before entering idle
         uint32_t warning_start = HAL_GetTick();
