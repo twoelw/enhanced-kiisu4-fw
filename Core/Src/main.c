@@ -25,6 +25,7 @@
 #include "stm32g4xx_ll_gpio.h"
 #include "stm32g4xx_ll_i2c.h"
 #include "stm32g4xx_ll_spi.h"
+#include "stm32g4xx.h"
 #include "rw_sh1106.h"
 #include "rw_i2c_emu.h"
 #include "led_pwm.h"
@@ -56,6 +57,11 @@ volatile uint8_t spi_display_critical_section = 0;
 static uint8_t startup_breath_active = 0;    // 1 while performing the single breath
 static uint32_t startup_breath_t0 = 0;       // start time (ms)
 static uint8_t startup_breath_phase = 0;     // 0 = ramp up, 1 = ramp down, 2 = done
+// Deferred app jump state (set by update flow, consumed safely in main loop)
+static volatile uint8_t g_app_jump_pending = 0;
+static volatile uint32_t g_app_jump_base = 0;
+// Track if we applied a hard quiet to SPI during firmware update
+static uint8_t update_quiet_hard_applied = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -70,6 +76,10 @@ static void MX_TIM6_Init(void);
 void handle_back_button(void);  // Function declaration
 void handle_shutdown_request(void);  // Clean shutdown function declaration
 void rw_display_apply_brightness_change(uint8_t brightness);  // Safe brightness change function
+void queue_bootloader_request(void); // I2C ISR asks main to jump to system memory
+static void jump_to_system_memory_bootloader(void); // actual jump implementation
+static void jump_to_application(uint32_t app_base);
+void request_jump_to_application(uint32_t app_base);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -87,11 +97,26 @@ uint8_t brightness_change_pending = 0; // Flag for pending brightness change
 uint8_t pending_brightness_value = 0; // Stored brightness value for pending change
 uint32_t brightness_change_requested_time = 0; // When the brightness change was requested
 
-// Shutdown request queueing
-uint8_t shutdown_request_queued = 0; // Flag to indicate a shutdown was requested while USB connected
+// Shutdown request queueing and LED blink control
+uint8_t shutdown_request_queued = 0; // latched when host requests shutdown
+static uint8_t shutdown_blink_active = 0; // drives rapid green blink until power off
+static uint32_t shutdown_blink_last_toggle = 0;
+static uint8_t shutdown_timer_active = 0;
+static uint32_t shutdown_timer_deadline = 0;
 // Allow I2C ISR to queue shutdown without heavy work
 void queue_shutdown_request(void) {
   shutdown_request_queued = 1;
+}
+// Allow other modules to schedule a delayed shutdown
+void queue_shutdown_after(uint32_t delay_ms) {
+  shutdown_timer_active = 1;
+  shutdown_timer_deadline = HAL_GetTick() + delay_ms;
+}
+
+// Bootloader request queueing
+static volatile uint8_t bootloader_request_queued = 0;
+void queue_bootloader_request(void) {
+  bootloader_request_queued = 1;
 }
 
 // Debounce and transition helpers
@@ -201,6 +226,21 @@ int main(void)
     /* USER CODE END WHILE */
     /* USER CODE BEGIN 3 */
   handle_back_button();  // Check for shutdown sequence
+  // Handle delayed shutdown timer
+  if (shutdown_timer_active && (int32_t)(HAL_GetTick() - shutdown_timer_deadline) >= 0) {
+    shutdown_timer_active = 0;
+    queue_shutdown_request();
+  }
+  // If a shutdown was requested at any time, immediately enter shutdown-blink mode and request power off
+  if (shutdown_request_queued && !shutdown_blink_active) {
+    shutdown_blink_active = 1;
+    shutdown_blink_last_toggle = HAL_GetTick();
+    // Silence peripherals and display
+    rw_display_off();
+    led_pwm_disable();
+    // Request power off (battery disconnect)
+    rw_powerswitch(0);
+  }
     uint8_t charge_state = rw_chargestate();
     // Track raw charge_state changes for debounce
     if (charge_state != charge_state_raw_last) {
@@ -274,7 +314,7 @@ int main(void)
     uint32_t target_mask = usb_target_color_mask(effective_cs);
   uint8_t intro_override = 0;
   uint8_t intro_just_finished = 0;
-    if (usb_intro_active) {
+  if (usb_intro_active) {
       uint32_t elapsed_intro = HAL_GetTick() - usb_intro_start_ms;
       // Smooth HSV-like hue cycle over 0..360deg per 1000 ms
       uint16_t h10 = (uint16_t)((elapsed_intro % 1000) * 3600 / 1000); // 0..3599
@@ -308,7 +348,7 @@ int main(void)
           // Turn off PWM helper so direct control owns LED.
           led_pwm_disable();
           // Only drive blue if PWM is disabled and pins are high (avoid brief conflict)
-          rw_led(0, 0, 1); // blue, not charging
+          if (!shutdown_blink_active) rw_led(0, 0, 1); // blue, not charging
         }
         rw_i2c_set_battery(adc_vsys, adc_usb, 0, 0);
       }
@@ -393,7 +433,7 @@ int main(void)
   // Remember the effective state for use outside this block
   last_effective_cs = effective_cs;
     }
-    else // Not connected to USB
+  else // Not connected to USB
     {
       if (usb_connected_prev) {
         // USB just disconnected; reset tracking
@@ -405,13 +445,7 @@ int main(void)
         led_pwm_disable();
       }
       // Check for queued shutdown request when USB is unplugged
-      if (shutdown_request_queued) {
-        // Execute the queued shutdown immediately
-        rw_led(0, 0, 0); // Turn off all LEDs
-        rw_display_off(); // Turn off display
-        rw_powerswitch(0); // Power off the device
-        while (1); // Hang here as device will power off
-      }
+  // handled at top of loop
       
   rw_i2c_set_battery(adc_vsys, 0, -20, 0);
       rw_chargeswitch(0);
@@ -484,6 +518,8 @@ int main(void)
           startup_breath_active = 0;
         }
       }
+
+  // shutdown blink handled unconditionally at loop end
 
   if (!startup_breath_active && rw_i2c_get_backlight() == 0) // Backlight is off
       {
@@ -606,9 +642,73 @@ int main(void)
         }
       }
     }
+  // If an I2C bootloader request was queued, handle it when safe
+  if (bootloader_request_queued) {
+    // Only allow when SPI OLED is idle to avoid tearing and when I2C isn't mid-transaction
+    // Basic checks: SPI TXE empty and not busy, and no display critical section
+    uint8_t spi_idle = (LL_SPI_IsActiveFlag_BSY(OLED_SPI) == 0) && !spi_display_critical_section;
+    if (spi_idle) {
+      // Update status to 'jumping' and perform clean handoff
+      rw_i2c_set_boot_status(0x03);
+      // Small delay to allow last I2C byte to go out, then jump
+      HAL_Delay(2);
+      jump_to_system_memory_bootloader();
+    } else {
+      // waiting-safe
+      rw_i2c_set_boot_status(0x02);
+    }
+  }
+
+  // If update flow asked us to quiet, tone down activity (no heavy animations)
+  if (rw_update_quiet_requested()) {
+    // Disable PWM-driven effects to reduce interrupts
+    led_pwm_disable();
+    // Hard quiet: disable both SPI peripherals and their IRQs once during update
+    if (!update_quiet_hard_applied) {
+      // Disable SPI2 (OLED) first to avoid display bus traffic
+      LL_SPI_Disable(OLED_SPI);
+      NVIC_DisableIRQ(SPI2_IRQn);
+      // Disable SPI1 (Companion) to avoid any RX IRQs while flashing
+      LL_SPI_Disable(COMPANION_SPI);
+      NVIC_DisableIRQ(SPI1_IRQn);
+      update_quiet_hard_applied = 1;
+    }
+  }
+  else if (update_quiet_hard_applied) {
+    // Optional: if quiet clears (e.g., aborted), re-enable SPI peripherals
+    NVIC_EnableIRQ(SPI1_IRQn);
+    LL_SPI_Enable(COMPANION_SPI);
+    NVIC_EnableIRQ(SPI2_IRQn);
+    LL_SPI_Enable(OLED_SPI);
+    update_quiet_hard_applied = 0;
+  }
+
+  // Process any pending firmware update actions (flash programming/finalize)
+  rw_update_process();
+
   // Tick LED PWM every iteration to keep timing smooth
   led_pwm_tick(HAL_GetTick());
   HAL_Delay(1);
+  // If shutdown blink is active, flash the green LED rapidly (approx 10 Hz) indefinitely.
+  // This is placed after other LED logic to ensure it overrides any other writes.
+  if (shutdown_blink_active) {
+    // Ensure PWM is disabled so direct LED control is effective
+    led_pwm_disable();
+    uint32_t now = HAL_GetTick();
+    if ((now - shutdown_blink_last_toggle) >= 50) { // 20 Hz toggle => 10 Hz blink
+      shutdown_blink_last_toggle = now;
+      static uint8_t on = 0;
+      on ^= 1;
+      rw_led(0, on ? 1 : 0, 0);
+    }
+  }
+  // Perform deferred app jump if requested
+  if (g_app_jump_pending) {
+    uint8_t spi_idle = (LL_SPI_IsActiveFlag_BSY(OLED_SPI) == 0) && !spi_display_critical_section;
+    if (spi_idle) {
+      jump_to_application(g_app_jump_base);
+    }
+  }
   // Track last charge state for transition handling
   // Track last effective state, not raw, to keep debounce consistent
   prev_charge_state = (adc_usb > 4400) ? last_effective_cs : 0;
@@ -1213,6 +1313,57 @@ void rw_display_apply_brightness_change(uint8_t brightness) {
     rw_display_on();
     rw_display_set_brightness(brightness);
   }
+}
+
+// Jump to system memory bootloader (non-returning)
+static void jump_to_system_memory_bootloader(void) {
+  // Turn off interrupts
+  __disable_irq();
+
+  // Put peripherals into a quiescent state
+  LL_SPI_Disable(OLED_SPI);
+  LL_SPI_Disable(COMPANION_SPI);
+  LL_I2C_Disable(I2C1);
+
+  // Deinit HAL (optional for cleaner state)
+  HAL_RCC_DeInit();
+  HAL_DeInit();
+
+  // Remap system memory and jump
+  // For STM32G4, system memory base is 0x1FFF0000 (reference manual)
+  typedef void (*pFunction)(void);
+  uint32_t sys_mem_base = 0x1FFF0000UL;
+  uint32_t jump_address = *(__IO uint32_t*)(sys_mem_base + 4);
+  pFunction JumpToBootloader = (pFunction)jump_address;
+  // Initialize stack pointer
+  __set_MSP(*(__IO uint32_t*)sys_mem_base);
+  // Update vector table offset if needed
+  SCB->VTOR = sys_mem_base;
+  // Jump
+  JumpToBootloader();
+  // Should never return
+  while(1) {}
+}
+
+void request_jump_to_application(uint32_t app_base) {
+  g_app_jump_base = app_base;
+  g_app_jump_pending = 1;
+}
+
+static void jump_to_application(uint32_t app_base) {
+  __disable_irq();
+  LL_SPI_Disable(OLED_SPI);
+  LL_SPI_Disable(COMPANION_SPI);
+  LL_I2C_Disable(I2C1);
+  HAL_RCC_DeInit();
+  HAL_DeInit();
+  typedef void (*pFunction)(void);
+  uint32_t jump_address = *(__IO uint32_t*)(app_base + 4);
+  pFunction JumpToApp = (pFunction)jump_address;
+  __set_MSP(*(__IO uint32_t*)app_base);
+  SCB->VTOR = app_base;
+  JumpToApp();
+  while(1) {}
 }
 /* USER CODE END 4 */
 
