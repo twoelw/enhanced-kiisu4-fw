@@ -469,9 +469,12 @@ void rw_display_on(void)
 
 void rw_display_set_brightness(uint8_t brightness)
 {
-	// Wait for ongoing SPI/drawing to finish
+	// Wait for ongoing SPI/drawing to finish and for companion CS to be idle
 	uint32_t timeout = HAL_GetTick() + 200; // 200ms timeout
-	while ((spi_display_critical_section || oled_drawing_in_progress) && HAL_GetTick() < timeout) {
+	while (HAL_GetTick() < timeout) {
+		uint8_t local_busy = (spi_display_critical_section || oled_drawing_in_progress);
+		uint8_t comp_active = (HAL_GPIO_ReadPin(DISPLAY_CS_GPIO_Port, DISPLAY_CS_Pin) == GPIO_PIN_RESET);
+		if (!local_busy && !comp_active) break;
 		HAL_Delay(1);
 	}
 
@@ -505,18 +508,18 @@ void rw_display_set_brightness(uint8_t brightness)
 
 void rw_display_drawing_start(void)
 {
-    oled_drawing_in_progress = 1;
-    // Also set the critical section to prevent any brightness changes
-    rw_display_spi_critical_start();
+	// Take exclusive ownership of the OLED bus
+	rw_display_spi_critical_start();
+	oled_drawing_in_progress = 1;
 }
 
 void rw_display_drawing_end(void)
 {
-    // Clear the critical section first
-    rw_display_spi_critical_end();
-    oled_drawing_in_progress = 0;
-    // Small delay to ensure any pending brightness changes can complete
-    HAL_Delay(1);
+	// Release ownership
+	oled_drawing_in_progress = 0;
+	rw_display_spi_critical_end();
+	// Small delay to ensure any pending brightness changes can complete
+	HAL_Delay(1);
 }
 
 /**
@@ -525,10 +528,19 @@ void rw_display_drawing_end(void)
  */
 void rw_display_spi_critical_start(void)
 {
-    // Disable interrupts briefly to make this atomic
-    __disable_irq();
-    spi_display_critical_section = 1;
-    __enable_irq();
+	// Wait for companion CS (DISPLAY_CS, active-low) to be deasserted to avoid tearing
+	uint32_t wait_until = HAL_GetTick() + 5; // short grace window
+	while ((HAL_GPIO_ReadPin(DISPLAY_CS_GPIO_Port, DISPLAY_CS_Pin) == GPIO_PIN_RESET) && (HAL_GetTick() < wait_until)) {
+		// Let companion finish current burst
+	}
+	// Take ownership: prevent SPI1 IRQ from forwarding bytes into OLED while we talk
+	NVIC_DisableIRQ(SPI1_IRQn);
+	// Mark critical section
+	__disable_irq();
+	spi_display_critical_section = 1;
+	__enable_irq();
+	// Ensure OLED SPI is idle before proceeding
+	while (LL_SPI_IsActiveFlag_BSY(OLED_SPI)) { /* wait */ }
 }
 
 /**
@@ -536,8 +548,11 @@ void rw_display_spi_critical_start(void)
  */
 void rw_display_spi_critical_end(void)
 {
-    // Disable interrupts briefly to make this atomic
-    __disable_irq();
-    spi_display_critical_section = 0;
-    __enable_irq();
+	// Ensure all OLED traffic completed before releasing
+	while (LL_SPI_IsActiveFlag_BSY(OLED_SPI)) { /* wait */ }
+	__disable_irq();
+	spi_display_critical_section = 0;
+	__enable_irq();
+	// Re-enable SPI1 IRQ so companion passthrough resumes
+	NVIC_EnableIRQ(SPI1_IRQn);
 }

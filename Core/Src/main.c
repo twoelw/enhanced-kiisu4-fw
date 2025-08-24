@@ -80,6 +80,8 @@ void queue_bootloader_request(void); // I2C ISR asks main to jump to system memo
 static void jump_to_system_memory_bootloader(void); // actual jump implementation
 static void jump_to_application(uint32_t app_base);
 void request_jump_to_application(uint32_t app_base);
+// Exposed for updater: start autonomous green success blink
+void start_green_success_blink(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -99,18 +101,43 @@ uint32_t brightness_change_requested_time = 0; // When the brightness change was
 
 // Shutdown request queueing and LED blink control
 uint8_t shutdown_request_queued = 0; // latched when host requests shutdown
-static uint8_t shutdown_blink_active = 0; // drives rapid green blink until power off
-static uint32_t shutdown_blink_last_toggle = 0;
+// Removed green shutdown blink; shutdown should be silent unless finalize success is active
 static uint8_t shutdown_timer_active = 0;
 static uint32_t shutdown_timer_deadline = 0;
+static uint8_t shutdown_force_on_timer = 0; // when set, force power-off ignoring USB gating
+// Success blink state (independent of host)
+static volatile uint8_t success_blink_active = 0;
+static uint32_t success_blink_last_toggle = 0;
 // Allow I2C ISR to queue shutdown without heavy work
 void queue_shutdown_request(void) {
+  shutdown_request_queued = 1;
+}
+// Minimal shutdown API used by some modules: only marks request; no LED or display side-effects
+void queue_shutdown_minimal(void) {
   shutdown_request_queued = 1;
 }
 // Allow other modules to schedule a delayed shutdown
 void queue_shutdown_after(uint32_t delay_ms) {
   shutdown_timer_active = 1;
   shutdown_timer_deadline = HAL_GetTick() + delay_ms;
+  shutdown_force_on_timer = 0;
+}
+
+// Force power off after delay (ignores USB gating); used only after finalize success
+void queue_shutdown_force_after(uint32_t delay_ms) {
+  shutdown_timer_active = 1;
+  shutdown_timer_deadline = HAL_GetTick() + delay_ms;
+  shutdown_force_on_timer = 1;
+}
+
+// Start immediate autonomous green blink; non-blocking and independent of host
+void start_green_success_blink(void) {
+  // Disable PWM so direct LED control is effective
+  led_pwm_disable();
+  success_blink_active = 1;
+  success_blink_last_toggle = 0; // force first toggle now
+  // Also ensure display is off to reduce power and visible conflicts
+  rw_display_off();
 }
 
 // Bootloader request queueing
@@ -229,17 +256,20 @@ int main(void)
   // Handle delayed shutdown timer
   if (shutdown_timer_active && (int32_t)(HAL_GetTick() - shutdown_timer_deadline) >= 0) {
     shutdown_timer_active = 0;
-    queue_shutdown_request();
+    if (shutdown_force_on_timer) {
+      // Immediate, unconditional power-off for finalize success
+      // Do not touch LEDs here; success blink may be active until power drop
+      rw_display_off();
+      rw_powerswitch(0);
+      while (1) { }
+    } else {
+      queue_shutdown_request();
+    }
   }
-  // If a shutdown was requested at any time, immediately enter shutdown-blink mode and request power off
-  if (shutdown_request_queued && !shutdown_blink_active) {
-    shutdown_blink_active = 1;
-    shutdown_blink_last_toggle = HAL_GetTick();
-    // Silence peripherals and display
-    rw_display_off();
-    led_pwm_disable();
-    // Request power off (battery disconnect)
-    rw_powerswitch(0);
+  // If a shutdown was requested, perform a clean shutdown respecting USB gating.
+  // No LED blinking here; finalize success blink is handled separately.
+  if (shutdown_request_queued) {
+    handle_shutdown_request();
   }
     uint8_t charge_state = rw_chargestate();
     // Track raw charge_state changes for debounce
@@ -285,7 +315,9 @@ int main(void)
         }
         
         // Process any pending brightness changes if it's now safe and not too old
-        if (brightness_change_pending && !spi_display_critical_section && !oled_drawing_in_progress) {
+  // Also avoid changing brightness while companion SPI1 is actively using the shared OLED (DISPLAY_CS low)
+  uint8_t comp_active_now = (HAL_GPIO_ReadPin(DISPLAY_CS_GPIO_Port, DISPLAY_CS_Pin) == GPIO_PIN_RESET);
+  if (brightness_change_pending && !spi_display_critical_section && !oled_drawing_in_progress && !comp_active_now) {
           // Only apply if the request is less than 500ms old to avoid stale changes
           if (HAL_GetTick() - brightness_change_requested_time < 500) {
             rw_display_apply_brightness_change(pending_brightness_value);
@@ -348,7 +380,7 @@ int main(void)
           // Turn off PWM helper so direct control owns LED.
           led_pwm_disable();
           // Only drive blue if PWM is disabled and pins are high (avoid brief conflict)
-          if (!shutdown_blink_active) rw_led(0, 0, 1); // blue, not charging
+          rw_led(0, 0, 1); // blue, not charging
         }
         rw_i2c_set_battery(adc_vsys, adc_usb, 0, 0);
       }
@@ -470,7 +502,8 @@ int main(void)
         }
         
         // Process any pending brightness changes if it's now safe and not too old
-        if (brightness_change_pending && !spi_display_critical_section && !oled_drawing_in_progress) {
+  uint8_t comp_active_now2 = (HAL_GPIO_ReadPin(DISPLAY_CS_GPIO_Port, DISPLAY_CS_Pin) == GPIO_PIN_RESET);
+  if (brightness_change_pending && !spi_display_critical_section && !oled_drawing_in_progress && !comp_active_now2) {
           // Only apply if the request is less than 500ms old to avoid stale changes
           if (HAL_GetTick() - brightness_change_requested_time < 500) {
             rw_display_apply_brightness_change(pending_brightness_value);
@@ -689,17 +722,15 @@ int main(void)
   // Tick LED PWM every iteration to keep timing smooth
   led_pwm_tick(HAL_GetTick());
   HAL_Delay(1);
-  // If shutdown blink is active, flash the green LED rapidly (approx 10 Hz) indefinitely.
-  // This is placed after other LED logic to ensure it overrides any other writes.
-  if (shutdown_blink_active) {
-    // Ensure PWM is disabled so direct LED control is effective
+  // If success blink is active (pre-shutdown), blink green at ~5 Hz to indicate success
+  if (success_blink_active) {
     led_pwm_disable();
     uint32_t now = HAL_GetTick();
-    if ((now - shutdown_blink_last_toggle) >= 50) { // 20 Hz toggle => 10 Hz blink
-      shutdown_blink_last_toggle = now;
-      static uint8_t on = 0;
-      on ^= 1;
-      rw_led(0, on ? 1 : 0, 0);
+    if ((now - success_blink_last_toggle) >= 100) { // 10 Hz toggle => 5 Hz blink
+      success_blink_last_toggle = now;
+      static uint8_t on2 = 0;
+      on2 ^= 1;
+      rw_led(0, on2 ? 1 : 0, 0);
     }
   }
   // Perform deferred app jump if requested

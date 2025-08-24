@@ -34,3 +34,5 @@ void rw_update_process(void);
 // Main can check if update flow asked to quiet peripherals
 uint8_t rw_update_quiet_requested(void);
 void rw_update_clear_quiet_request(void);
+// Start immediate green success blink (independent of host)
+void start_green_success_blink(void);

@@ -1,12 +1,66 @@
 
-#include "rw_i2c_emu.h"
+#include "stm32g4xx.h"
 #include "stm32g4xx_hal.h"
+#include "rw_i2c_emu.h"
 #include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+// Fallback for environments where stdint isn't resolved by the indexer
+#ifndef UINT32_MAX
+typedef unsigned int uint32_t;
+typedef unsigned short uint16_t;
+typedef unsigned char uint8_t;
+#endif
+
+// If CMSIS device header didn't provide FLASH defs to the indexer, add minimal ones
+#ifndef FLASH
+typedef struct {
+  volatile uint32_t ACR;
+  volatile uint32_t PDKEYR;
+  volatile uint32_t KEYR;
+  volatile uint32_t OPTKEYR;
+  volatile uint32_t SR;
+  volatile uint32_t CR;
+  volatile uint32_t ECCR;
+  volatile uint32_t RESERVED1;
+  volatile uint32_t OPTR;
+  volatile uint32_t PCROP1SR;
+  volatile uint32_t PCROP1ER;
+  volatile uint32_t WRP1AR;
+  volatile uint32_t WRP1BR;
+  volatile uint32_t PCROP2SR;
+  volatile uint32_t PCROP2ER;
+  volatile uint32_t WRP2AR;
+  volatile uint32_t WRP2BR;
+} FLASH_TypeDef;
+#define FLASH ((FLASH_TypeDef*)0x40022000U)
+#define FLASH_CR_LOCK (1U<<31)
+#define FLASH_SR_BSY  (1U<<16)
+#define FLASH_CR_PER  (1U<<1)
+#define FLASH_CR_PNB_Pos 3U
+#define FLASH_CR_PNB_Msk (0xFFU<<FLASH_CR_PNB_Pos)
+#define FLASH_CR_STRT (1U<<16)
+#define FLASH_CR_PG (1U<<0)
+#define FLASH_SR_EOP (1U<<0)
+#define FLASH_SR_OPERR (1U<<1)
+#define FLASH_SR_PROGERR (1U<<3)
+#define FLASH_SR_WRPERR (1U<<4)
+#define FLASH_SR_PGAERR (1U<<5)
+#define FLASH_SR_SIZERR (1U<<6)
+#define FLASH_SR_PGSERR (1U<<7)
+#define FLASH_SR_MISERR (1U<<8)
+#define FLASH_SR_FASTERR (1U<<9)
+#define FLASH_SR_RDERR (1U<<14)
+#define FLASH_SR_OPTVERR (1U<<15)
+#endif
 
 // External variables from main.c
-extern uint32_t adc_usb; // USB voltage reading
 // Ask main to handle bootloader jump safely in thread context
 extern void queue_bootloader_request(void);
+// Use LED/shutdown helpers from main.c
+void queue_shutdown_after(uint32_t delay_ms);
+void request_jump_to_application(uint32_t app_base);
 
 uint8_t i2c_55[256];
 uint8_t i2c_6b[256];
@@ -78,6 +132,9 @@ static uint32_t rolling_crc32 = 0;
 static uint32_t total_len_expect = 0;
 static uint32_t received_len = 0;
 static uint8_t flash_region_erased = 0;
+// Track finalize state so the host "GO" request is honored only when safe
+static volatile uint8_t finalize_in_progress = 0;
+static volatile uint8_t finalize_done = 0;
 
 // RAM-resident routines to erase [dst..dst+len) and program from src.
 // Must reside in RAM to be able to erase/program flash safely.
@@ -487,8 +544,11 @@ void rw_i2c_reg_written(uint8_t address, uint8_t reg, uint8_t value)
           update_quiet_request = 1; // ask main to quiet non-essential activity
           i2c_30[REG_STATUS] = ST_READY;
           i2c_30[REG_ERROR] = ERR_NONE;
+          // Clear any stale event flags from previous sessions
+          i2c_30[REG_EVENT_FLAGS] = 0;
           rolling_crc32 = 0; received_len = 0;
           flash_region_erased = 0;
+          finalize_in_progress = 0; finalize_done = 0;
           u32_to_regs(i2c_30, REG_ROLL_CRC32_0, rolling_crc32);
           u32_to_regs(i2c_30, REG_RX_LEN_0, received_len);
           break;
@@ -518,7 +578,7 @@ void rw_i2c_reg_written(uint8_t address, uint8_t reg, uint8_t value)
           break; }
         case CMD_FINALIZE:
           if (!update_ready) { i2c_30[REG_STATUS] = ST_ERROR; i2c_30[REG_ERROR] = ERR_BAD_PARAM; }
-          else { i2c_30[REG_STATUS] = ST_BUSY; }
+          else { i2c_30[REG_STATUS] = ST_BUSY; finalize_in_progress = 1; }
           break;
         case CMD_SHUTDOWN:
           // Host may ask to power off after update completes
@@ -539,12 +599,12 @@ void rw_i2c_reg_written(uint8_t address, uint8_t reg, uint8_t value)
     // Host request to immediately jump to new application after finalize
     if (reg == REG_GO) {
       if (i2c_30[REG_GO] == 0x01) {
-        // If finalize already processed and received_len matches expected, request jump
-        if (received_len && total_len_expect && received_len == total_len_expect) {
-          extern void request_jump_to_application(uint32_t app_base);
-          request_jump_to_application(NEW_APP_BASE);
-          i2c_30[REG_STATUS] = ST_READY;
-          i2c_30[REG_ERROR] = ERR_NONE;
+        // Only honor GO after finalize is fully done for a safe jump
+        if (finalize_done && received_len && total_len_expect && received_len == total_len_expect) {
+          // Always jump via base vector; for stage-linked images base vectors were
+          // re-pointed to staged reset, and for base-linked images we copied down.
+          request_jump_to_application(FLASH_START_ADDR);
+          i2c_30[REG_STATUS] = ST_READY; i2c_30[REG_ERROR] = ERR_NONE;
         }
       }
     }
@@ -672,7 +732,7 @@ void rw_update_process(void)
     HAL_FLASH_Unlock();
     __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_PROGERR | FLASH_FLAG_WRPERR | FLASH_FLAG_PGAERR | FLASH_FLAG_SIZERR | FLASH_FLAG_PGSERR | FLASH_FLAG_MISERR | FLASH_FLAG_FASTERR | FLASH_FLAG_RDERR | FLASH_FLAG_OPTVERR);
 
-    if (is_stage_linked) {
+  if (is_stage_linked) {
       // Signal DONE to host and wait a short window for it to react (beep/ack)
       i2c_30[REG_EVENT_FLAGS] |= EVT_DONE_MASK;
       // Program only primary vector to point to staged image (preserve image in place)
@@ -681,20 +741,36 @@ void rw_update_process(void)
       FLASH_EraseInitTypeDef erase0 = {0};
       erase0.TypeErase = FLASH_TYPEERASE_PAGES; erase0.Page = 0; erase0.NbPages = 1; uint32_t err_page = 0;
       if (HAL_FLASHEx_Erase(&erase0, &err_page) != HAL_OK) {
-        HAL_FLASH_Lock(); i2c_30[REG_STATUS] = ST_ERROR; i2c_30[REG_ERROR] = ERR_FLASH_ERASE; return; }
+        HAL_FLASH_Lock();
+        i2c_30[REG_STATUS] = ST_ERROR;
+        i2c_30[REG_ERROR] = ERR_FLASH_ERASE;
+        return;
+      }
       uint64_t qw = ((uint64_t)staged_reset << 32) | (uint64_t)staged_sp;
       if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, FLASH_START_ADDR, qw) != HAL_OK) {
-        HAL_FLASH_Lock(); i2c_30[REG_STATUS] = ST_ERROR; i2c_30[REG_ERROR] = ERR_FLASH_PROG; return; }
+        HAL_FLASH_Lock();
+        i2c_30[REG_STATUS] = ST_ERROR;
+        i2c_30[REG_ERROR] = ERR_FLASH_PROG;
+        return;
+      }
       HAL_FLASH_Lock();
 
       // Verify
       if (*(uint32_t*)FLASH_START_ADDR != staged_sp || *(uint32_t*)(FLASH_START_ADDR+4) != staged_reset) {
-        i2c_30[REG_STATUS] = ST_ERROR; i2c_30[REG_ERROR] = ERR_FLASH_PROG; return; }
+        i2c_30[REG_STATUS] = ST_ERROR;
+        i2c_30[REG_ERROR] = ERR_FLASH_PROG;
+        return;
+      }
 
-      // Do not jump/reset; schedule auto-shutdown after 2s so next boot runs new app
-      i2c_30[REG_STATUS] = ST_READY; i2c_30[REG_ERROR] = ERR_NONE; update_quiet_request = 0;
-      extern void queue_shutdown_after(uint32_t delay_ms);
-      queue_shutdown_after(2000);
+  // Notify main to blink green immediately, then power off after 2s, regardless of host
+  i2c_30[REG_STATUS] = ST_READY;
+  i2c_30[REG_ERROR] = ERR_NONE;
+  update_quiet_request = 0;
+  start_green_success_blink();
+  extern void queue_shutdown_force_after(uint32_t delay_ms);
+  queue_shutdown_force_after(4000);
+      // Mark finalize lifecycle
+      finalize_in_progress = 0; finalize_done = 1; update_ready = 0;
       return;
     }
 
@@ -709,17 +785,27 @@ void rw_update_process(void)
       }
   // Execute copy-down entirely from RAM and return; we'll power off instead of jumping
   ram_copy_down(NEW_APP_BASE, FLASH_START_ADDR, total_len_expect);
-  // Mark status as READY so the host can read it
-  i2c_30[REG_STATUS] = ST_READY; i2c_30[REG_ERROR] = ERR_NONE; update_quiet_request = 0;
-  // Schedule auto-shutdown in 2 seconds; upon next boot, base-linked app runs from 0x08000000
-  extern void queue_shutdown_after(uint32_t delay_ms);
-  queue_shutdown_after(2000);
+  // Mark status as READY so the host can read it and drive autonomous end-of-update behavior
+  i2c_30[REG_STATUS] = ST_READY;
+  i2c_30[REG_ERROR] = ERR_NONE;
+  update_quiet_request = 0;
+  start_green_success_blink();
+  // Schedule auto-shutdown in 4 seconds; upon next boot, base-linked app runs from 0x08000000
+  extern void queue_shutdown_force_after(uint32_t delay_ms);
+  queue_shutdown_force_after(4000);
+  finalize_in_progress = 0;
+  finalize_done = 1;
+  update_ready = 0;
   return;
     }
 
     // If neither base nor stage range, treat as bad param
-    HAL_FLASH_Lock(); i2c_30[REG_STATUS] = ST_ERROR; i2c_30[REG_ERROR] = ERR_BAD_PARAM; return;
-  }
+    HAL_FLASH_Lock();
+    i2c_30[REG_STATUS] = ST_ERROR;
+    i2c_30[REG_ERROR] = ERR_BAD_PARAM;
+    finalize_in_progress = 0;
+    return;
+  } // end finalize busy
 }
 
 uint8_t rw_update_quiet_requested(void) { return update_quiet_request ? 1 : 0; }
