@@ -2,6 +2,12 @@
 #include "rw_sh1106.h"
 #include "main.h"
 
+// External drawing flag from main.c
+extern uint8_t oled_drawing_in_progress;
+
+// External priority protection variable from main.c
+extern volatile uint8_t spi_display_critical_section;
+
 #define SH1106_SETCONTRAST 0x81
 #define SH1106_DISPLAYALLON_RESUME 0xA4
 #define SH1106_DISPLAYALLON 0xA5
@@ -54,20 +60,26 @@ uint8_t ssd1306_row = 0;
 
 void _cmd(uint8_t arg)
 {
+	rw_display_spi_critical_start();
 	rw_sh1106_pins_set(false, false, true); //cs dc rst
 	rw_sh1106_spi_write(&arg, 1);
+	rw_display_spi_critical_end();
 }
 
 void _data(uint8_t *data, size_t len)
 {
+	rw_display_spi_critical_start();
 	rw_sh1106_pins_set(false, true, true); //cs dc rst
 	rw_sh1106_spi_write(data, len);
+	rw_display_spi_critical_end();
 }
 
 void _data1(uint8_t arg)
 {
+	rw_display_spi_critical_start();
 	rw_sh1106_pins_set(false, true, true); //cs dc rst
 	rw_sh1106_spi_write(&arg, 1);
+	rw_display_spi_critical_end();
 }
 
 void rw_sh1106_init(void)
@@ -104,13 +116,16 @@ void rw_sh1106_init(void)
 	{ _cmd(0x9F); }
 	else 
 	{ _cmd(0xCF); }
-	_cmd(SH1106_SETPRECHARGE); // 0xd9
-	if (vccstate == SH1106_EXTERNALVCC) 
-	{ _cmd(0x22); }
-	else 
-	{ _cmd(0xF1); }
+	// Set the pump voltage (VPP) to the lowest supported value (6.4V) to reduce baseline brightness
+	_cmd(0x30); // Command 3: Set Pump voltage value = 6.4V (A1:A0=00)
+
+	// Use POR precharge/discharge timing (0x22) for a softer baseline; safe and per datasheet
+	_cmd(SH1106_SETPRECHARGE); // 0xD9
+	_cmd(0x22); // Dis-charge=2 DCLKs, Pre-charge=2 DCLKs
+
+	// Set VCOM deselect to POR 0x35 (typical), which is lower than previous 0x40 and reduces brightness slightly
 	_cmd(SH1106_SETVCOMDETECT); // 0xDB
-	_cmd(0x40);
+	_cmd(0x35);
 	_cmd(SH1106_DEACTIVATE_SCROLL);
 	_cmd(SH1106_DISPLAYALLON_RESUME); // 0xA4
 	_cmd(SH1106_NORMALDISPLAY); // 0xA6
@@ -153,15 +168,18 @@ void rw_sh1106_char(char c)
 
 void rw_sh1106_print(char *str)
 {
+	rw_display_drawing_start();
 	int i = 0;
 	while ((str[i] > 0)&&(i < 256))
 	{
 		rw_sh1106_char(str[i++]);
 	}
+	rw_display_drawing_end();
 }
 
 void rw_sh1106_fill(uint8_t pattern)
 {
+	rw_display_drawing_start();
 	for (char row = 0; row < 8; row++)
 	{
 		rw_sh1106_setposition(0, row);
@@ -170,6 +188,7 @@ void rw_sh1106_fill(uint8_t pattern)
 			_data1(pattern);
 		}
 	}
+	rw_display_drawing_end();
 }
 
 uint8_t font[] = {
@@ -432,10 +451,108 @@ uint8_t font[] = {
 };
 void rw_display_off(void) // For idle modes
 {
-    _cmd(SH1106_DISPLAYOFF); // 0xAE
+    rw_display_spi_critical_start();
+    rw_sh1106_pins_set(false, false, true); //cs dc rst
+    uint8_t cmd = SH1106_DISPLAYOFF;
+    rw_sh1106_spi_write(&cmd, 1);
+    rw_display_spi_critical_end();
 }
 
 void rw_display_on(void)
 {
-    _cmd(SH1106_DISPLAYON); // 0xAF
+    rw_display_spi_critical_start();
+    rw_sh1106_pins_set(false, false, true); //cs dc rst
+    uint8_t cmd = SH1106_DISPLAYON;
+    rw_sh1106_spi_write(&cmd, 1);
+    rw_display_spi_critical_end();
+}
+
+void rw_display_set_brightness(uint8_t brightness)
+{
+	// Wait for ongoing SPI/drawing to finish and for companion CS to be idle
+	uint32_t timeout = HAL_GetTick() + 200; // 200ms timeout
+	while (HAL_GetTick() < timeout) {
+		uint8_t local_busy = (spi_display_critical_section || oled_drawing_in_progress);
+		uint8_t comp_active = (HAL_GPIO_ReadPin(DISPLAY_CS_GPIO_Port, DISPLAY_CS_Pin) == GPIO_PIN_RESET);
+		if (!local_busy && !comp_active) break;
+		HAL_Delay(1);
+	}
+
+	// Enter SPI critical section
+	rw_display_spi_critical_start();
+
+	if (brightness == 0) {
+		// Turn display off entirely
+		_cmd(SH1106_DISPLAYOFF);
+		rw_display_spi_critical_end();
+		return;
+	}
+
+	// Ensure display is on
+	_cmd(SH1106_DISPLAYON);
+
+	// Map 0..255 to 0x01..0xFF with a stronger gamma curve for deeper low-end
+	// Gamma approximation: value^3 / (255^2)
+	uint32_t v = brightness;              // 0..255
+	uint32_t gamma = (v * v * v + 65025/2) / 65025; // rounded, still 0..255
+	uint8_t contrast = (gamma == 0 && brightness > 0) ? 1 : (uint8_t)gamma; // ensure nonzero when >0
+	if (brightness <= 8 && contrast < 1) contrast = 1; // ultra-dim floor
+
+	_cmd(SH1106_SETCONTRAST);
+	_cmd(contrast);
+
+	// Do NOT touch pump voltage, precharge, or VCOM here to avoid glitches
+
+	rw_display_spi_critical_end();
+}
+
+void rw_display_drawing_start(void)
+{
+	// Take exclusive ownership of the OLED bus
+	rw_display_spi_critical_start();
+	oled_drawing_in_progress = 1;
+}
+
+void rw_display_drawing_end(void)
+{
+	// Release ownership
+	oled_drawing_in_progress = 0;
+	rw_display_spi_critical_end();
+	// Small delay to ensure any pending brightness changes can complete
+	HAL_Delay(1);
+}
+
+/**
+ * @brief Start critical section for SPI display operations
+ *        This ensures brightness changes cannot interfere with display drawing
+ */
+void rw_display_spi_critical_start(void)
+{
+	// Wait for companion CS (DISPLAY_CS, active-low) to be deasserted to avoid tearing
+	uint32_t wait_until = HAL_GetTick() + 5; // short grace window
+	while ((HAL_GPIO_ReadPin(DISPLAY_CS_GPIO_Port, DISPLAY_CS_Pin) == GPIO_PIN_RESET) && (HAL_GetTick() < wait_until)) {
+		// Let companion finish current burst
+	}
+	// Take ownership: prevent SPI1 IRQ from forwarding bytes into OLED while we talk
+	NVIC_DisableIRQ(SPI1_IRQn);
+	// Mark critical section
+	__disable_irq();
+	spi_display_critical_section = 1;
+	__enable_irq();
+	// Ensure OLED SPI is idle before proceeding
+	while (LL_SPI_IsActiveFlag_BSY(OLED_SPI)) { /* wait */ }
+}
+
+/**
+ * @brief End critical section for SPI display operations
+ */
+void rw_display_spi_critical_end(void)
+{
+	// Ensure all OLED traffic completed before releasing
+	while (LL_SPI_IsActiveFlag_BSY(OLED_SPI)) { /* wait */ }
+	__disable_irq();
+	spi_display_critical_section = 0;
+	__enable_irq();
+	// Re-enable SPI1 IRQ so companion passthrough resumes
+	NVIC_EnableIRQ(SPI1_IRQn);
 }

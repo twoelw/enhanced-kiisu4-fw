@@ -133,6 +133,17 @@ SECTIONS
   /* used by the startup to initialize data */
   _sidata = LOADADDR(.data);
 
+  /* Functions that must run from RAM (flash operations) */
+  .ramfunc :
+  {
+    . = ALIGN(4);
+    __ramfunc_start__ = .;
+    KEEP(*(.ramfunc))
+    KEEP(*(.RamFunc))
+    __ramfunc_end__ = .;
+  } >RAM AT> FLASH
+  __ramfunc_load_start__ = LOADADDR(.ramfunc);
+
   /* Initialized data sections goes into RAM, load LMA copy after code */
   .data : 
   {
