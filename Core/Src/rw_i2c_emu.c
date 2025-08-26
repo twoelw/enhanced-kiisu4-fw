@@ -2,6 +2,7 @@
 #include "stm32g4xx.h"
 #include "stm32g4xx_hal.h"
 #include "rw_i2c_emu.h"
+#include "settings.h"
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -65,6 +66,7 @@ void request_jump_to_application(uint32_t app_base);
 uint8_t i2c_55[256];
 uint8_t i2c_6b[256];
 uint8_t i2c_30[256];
+uint8_t i2c_31[256]; // settings
 
 // ===== Firmware update state (addr 0x30) =====
 // Register map constants
@@ -485,6 +487,15 @@ void rw_i2c_emu_init()
   u32_to_regs(i2c_30, REG_TOTAL_LEN_0, 0);
   u32_to_regs(i2c_30, REG_RX_LEN_0, 0);
   i2c_30[REG_EVENT_FLAGS] = 0;
+
+  // Settings page defaults at 0x31
+  extern void settings_init(void);
+  settings_init();
+  // Mirror current settings so host can read initial values
+  i2c_31[0x00] = settings_get_led_brightness_pct_raw();
+  i2c_31[0x01] = (uint8_t)settings_get_auto_poweroff_raw();
+  i2c_31[0x02] = (uint8_t)settings_get_startup_color_raw();
+  i2c_31[0x03] = settings_get_charge_rainbow_raw();
 }
 
 void rw_i2c_set_battery(int16_t vbatt,int16_t vusb,int16_t current, uint8_t charge_state) 
@@ -609,6 +620,31 @@ void rw_i2c_reg_written(uint8_t address, uint8_t reg, uint8_t value)
       }
     }
   }
+  else if (address == 0x31)
+  {
+    i2c_31[reg] = value;
+    // Route to settings service
+    switch (reg) {
+      case 0x00: // LED brightness percent (0 or 5..100)
+        settings_set_led_brightness_percent(value, HAL_GetTick());
+        break;
+      case 0x01: // Auto poweroff index
+        settings_set_auto_poweroff((kiisu_apoff_t)value);
+        break;
+      case 0x02: // Startup color
+        settings_set_startup_color((kiisu_start_color_t)value, HAL_GetTick());
+        break;
+      case 0x03: // Charge rainbow
+        settings_set_charge_rainbow(value ? 1 : 0, HAL_GetTick());
+        break;
+      default: break;
+    }
+  // Keep mirror current
+  i2c_31[0x00] = settings_get_led_brightness_pct_raw();
+  i2c_31[0x01] = (uint8_t)settings_get_auto_poweroff_raw();
+  i2c_31[0x02] = (uint8_t)settings_get_startup_color_raw();
+  i2c_31[0x03] = settings_get_charge_rainbow_raw();
+  }
   else if (address == 0x55)
   {
     //i2c_55[reg] = value
@@ -625,6 +661,10 @@ uint8_t rw_i2c_get_reg(uint8_t address, uint8_t reg)
   else if (address == 0x30)
   {
   return i2c_30[reg];
+  }
+  else if (address == 0x31)
+  {
+  return i2c_31[reg];
   }
   else if (address == 0x55)
   {
