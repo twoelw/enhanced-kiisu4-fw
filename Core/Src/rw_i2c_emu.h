@@ -36,3 +36,12 @@ uint8_t rw_update_quiet_requested(void);
 void rw_update_clear_quiet_request(void);
 // Start immediate green success blink (independent of host)
 void start_green_success_blink(void);
+
+// Settings access via I2C addr 0x31
+// Register map:
+//  0x00: LED_BRIGHTNESS (0=Auto; 5..100 step 5). Write triggers 1.2s yellow preview.
+//  0x01: AUTO_POWEROFF index (0=Off,1=15s,2=30s,3=1m,4=5m,5=10m,6=30m,7=60m)
+//  0x02: STARTUP_COLOR (0=Purple,1=Off,2=Red,3=Green,4=Blue,5=Yellow,6=Cyan,7=Magenta,8=White). Write triggers 1s preview.
+//  0x03: CHARGE_RAINBOW (1=On default,0=Off). Write requests brief showcase.
+// Reads return last set values. No side effects on read.
+
