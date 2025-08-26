@@ -498,7 +498,7 @@ int main(void)
   rw_i2c_set_battery(adc_vsys, 0, -20, 0);
       rw_chargeswitch(0);
       
-      // OLED brightness control with priority protection for SPI operations
+  // OLED brightness control with priority protection for SPI operations
       // Only check brightness every 50ms to reduce conflicts with drawing
       if (HAL_GetTick() - last_brightness_check >= 50) {
         uint8_t current_backlight = rw_i2c_get_backlight();
@@ -530,6 +530,9 @@ int main(void)
         
         last_brightness_check = HAL_GetTick();
       }
+
+  // Opportunistically persist settings while on battery
+  settings_process(HAL_GetTick());
       
   // Run the one-shot startup purple breath (non-blocking) when not on USB and not charging/charged
       if (startup_breath_active) {
@@ -560,12 +563,14 @@ int main(void)
         if (duty < 30) duty = (startup_breath_phase == 2) ? 0 : 30;
   led_pwm_set_color(startup_breath_r, startup_breath_g, startup_breath_b);
         led_pwm_set_duty_0_2000(duty);
-        if (startup_breath_phase == 2) {
+  if (startup_breath_phase == 2) {
           // Finish: release PWM ownership and turn LED fully off
           led_pwm_disable();
           rw_led(0, 0, 0);
           startup_breath_active = 0;
         }
+  // Allow settings to persist during startup breath as well
+  settings_process(HAL_GetTick());
       }
 
   // Non-USB: handle a short rainbow preview animation when requested
@@ -616,7 +621,7 @@ int main(void)
         // Debounce helper for USB attach during warning
         uint32_t usb_attach_start_warning = 0;
         uint32_t last_usb_poll_warning = HAL_GetTick();
-        while (HAL_GetTick() - warning_start < 3000) // 3-second warning
+  while (HAL_GetTick() - warning_start < 3000) // 3-second warning
         {
           // If USB got attached, exit warning immediately and let main loop handle charging path
           if (HAL_GetTick() - last_usb_poll_warning >= 50) { // poll USB ~20Hz
@@ -651,6 +656,8 @@ int main(void)
             break;
           }
           
+          // Allow settings to persist while unplugged
+          settings_process(HAL_GetTick());
           HAL_Delay(10); // Small delay to reduce CPU load
         }
         
@@ -717,6 +724,8 @@ int main(void)
             if (duty < 30) duty = 0;
             led_pwm_set_duty_0_2000(duty);
             
+            // Allow settings to persist while unplugged
+            settings_process(HAL_GetTick());
             HAL_Delay(1); // Small delay to reduce CPU load
           }
           
