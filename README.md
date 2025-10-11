@@ -24,3 +24,16 @@ Use CMAKE or VisualGDB project (Companion\KiisuCompanion.sln)
 
 * This method will work always, buy you need to make or buy SWD programmer or USB adapter.
 * Get manual for your board here: https://github.com/kiisu-io/kiisu4 and follow the instructions.
+
+## Other resources
+
+- [Kiisu.io website](https://kiisu.io)
+- [Buy Kiisu here](https://store.rainwalker.ee/products/kiisu-v4)
+- [Documentation, schematics and binaries for Kiisu V4](https://github.com/kiisu-io/kiisu4)
+- [Our Discord Community](https://discord.gg/kiisu) can help with your questions
+  
+- [Fork of Flipper Zero official firmware for Kiisu](https://github.com/kiisu-io/kiisu-firmware)
+- [Twoelw's GitHub](https://github.com/twoelw) with useful apps and firmware for Kiisu.
+
+- [Cases and stuff for 3D printing on Printables](https://www.printables.com/@planmarks/collections/2364779)
+- [Cases and stuff for 3D printing on Makerworld](https://makerworld.com/ru/collections/6517412-kiisu-devboard)
