@@ -142,10 +142,16 @@ static uint8_t flash_region_erased = 0;
 static volatile uint8_t finalize_in_progress = 0;
 static volatile uint8_t finalize_done = 0;
 
-// RAM-resident routines to erase [dst..dst+len) and program from src.
+// RAM-resident routine to erase [dst..dst+len) and program from src.
 // Must reside in RAM to be able to erase/program flash safely.
-static void __attribute__((section(".ramfunc"), noinline)) ram_copy_down(uint32_t src, uint32_t dst, uint32_t len)
+// Returns 0 on success, otherwise FLASH->SR bits that flagged the failure.
+// IWDG is refreshed directly via IWDG->KR between pages so a long OTA
+// (~3-4 s for a 112 KB image) doesn't trip the ~4 s watchdog.
+static uint32_t __attribute__((section(".ramfunc"), noinline)) ram_copy_down(uint32_t src, uint32_t dst, uint32_t len)
 {
+  const uint32_t ERR_MASK = (FLASH_SR_PROGERR | FLASH_SR_WRPERR | FLASH_SR_PGAERR |
+                             FLASH_SR_SIZERR  | FLASH_SR_PGSERR | FLASH_SR_MISERR |
+                             FLASH_SR_FASTERR | FLASH_SR_OPTVERR);
   __disable_irq();
   // Unlock if locked
   if (FLASH->CR & FLASH_CR_LOCK) {
@@ -166,6 +172,12 @@ static void __attribute__((section(".ramfunc"), noinline)) ram_copy_down(uint32_
     FLASH->CR |= FLASH_CR_STRT;
     while (FLASH->SR & FLASH_SR_BSY) { /* wait */ }
     FLASH->CR &= ~FLASH_CR_PER;
+    if (FLASH->SR & ERR_MASK) {
+      uint32_t err = FLASH->SR & ERR_MASK;
+      __enable_irq();
+      return err;
+    }
+    IWDG->KR = 0xAAAA; // refresh watchdog between pages (~22ms each)
   }
 
   // Program doublewords
@@ -183,9 +195,19 @@ static void __attribute__((section(".ramfunc"), noinline)) ram_copy_down(uint32_
     *((volatile uint32_t*)d) = (uint32_t)(val & 0xFFFFFFFFu);
     *((volatile uint32_t*)(d + 4)) = (uint32_t)(val >> 32);
     while (FLASH->SR & FLASH_SR_BSY) { /* wait */ }
+    if (FLASH->SR & ERR_MASK) {
+      uint32_t err = FLASH->SR & ERR_MASK;
+      FLASH->CR &= ~FLASH_CR_PG;
+      __enable_irq();
+      return err;
+    }
+    if ((off & 0x7FF) == 0) {
+      IWDG->KR = 0xAAAA; // refresh once per 2 KB programmed
+    }
   }
   FLASH->CR &= ~FLASH_CR_PG;
   __enable_irq();
+  return 0;
 }
 
 // CRC16/X25: poly 0x1021 (reflected 0x8408), init 0xFFFF, refin=true, refout=true, xorout=0xFFFF
@@ -828,7 +850,17 @@ void rw_update_process(void)
         memcpy(&__ramfunc_start__, &__ramfunc_load_start__, ramfunc_size);
       }
   // Execute copy-down entirely from RAM and return; we'll power off instead of jumping
-  ram_copy_down(NEW_APP_BASE, FLASH_START_ADDR, total_len_expect);
+  uint32_t copy_err = ram_copy_down(NEW_APP_BASE, FLASH_START_ADDR, total_len_expect);
+  if (copy_err) {
+    // Flash erase/program failed mid-way. Live image at 0x08000000 is now
+    // partially overwritten; we cannot recover here, but we must NOT signal
+    // success — host stays in update mode and can retry or escalate.
+    i2c_30[REG_STATUS] = ST_ERROR;
+    i2c_30[REG_ERROR]  = ERR_FLASH_PROG;
+    finalize_in_progress = 0;
+    update_ready = 0;
+    return;
+  }
   // Mark status as READY so the host can read it and drive autonomous end-of-update behavior
   i2c_30[REG_STATUS] = ST_READY;
   i2c_30[REG_ERROR] = ERR_NONE;
