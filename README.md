@@ -1,5 +1,7 @@
 # Kiisu V4a/V4b companion firmware
 
+[![Build firmware](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml)
+
 To provide compatibility with Flipper Zero Firmwares on Kiisu development boards.
 
 ## Status
@@ -12,7 +14,30 @@ To provide compatibility with Flipper Zero Firmwares on Kiisu development boards
 
 ## Building
 
-Use CMAKE or VisualGDB project (Companion\KiisuCompanion.sln)
+Two options, both produce identical firmware (`KiisuCompanion.elf` + `KiisuCompanion.bin`).
+
+### From the command line (CMake + arm-none-eabi-gcc)
+
+Requires `arm-none-eabi-gcc` (tested with 14.2.Rel1 and 15.2.Rel1), `cmake` (>= 3.22) and `ninja`.
+
+```sh
+cmake --preset Debug              # or Release
+cmake --build build/Debug         # or build/Release
+```
+
+The post-build step produces a `.bin` next to the `.elf`. To flash via ST-Link:
+
+```sh
+cmake --build build/Debug --target flash
+```
+
+### From VisualGDB
+
+Open `Companion/KiisuCompanion.sln`; the project drives the same CMake configuration.
+
+### Prebuilt binaries
+
+Every push to `main` and every pull request triggers a CI build of both `Debug` and `Release` presets. Artifacts (`.elf` + `.bin`) are attached to each run — see the [Actions tab](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml).
 
 ## Flashing via Kiisu Companion Bridge
 
@@ -22,7 +47,7 @@ Use CMAKE or VisualGDB project (Companion\KiisuCompanion.sln)
 
 ## Flashing via SWD or USB interface
 
-* This method will work always, buy you need to make or buy SWD programmer or USB adapter.
+* This method will work always, but you need to make or buy SWD programmer or USB adapter.
 * Get manual for your board here: https://github.com/kiisu-io/kiisu4 and follow the instructions.
 
 ## Other resources
