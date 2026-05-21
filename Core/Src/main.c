@@ -25,6 +25,8 @@
 #include "stm32g4xx_ll_gpio.h"
 #include "stm32g4xx_ll_i2c.h"
 #include "stm32g4xx_ll_spi.h"
+#include "stm32g4xx_ll_iwdg.h"
+#include "stm32g4xx_ll_rcc.h"
 #include "stm32g4xx.h"
 #include "rw_sh1106.h"
 #include "rw_i2c_emu.h"
@@ -148,6 +150,25 @@ void queue_bootloader_request(void) {
   bootloader_request_queued = 1;
 }
 
+// Independent watchdog safety net. Reset if main loop stops servicing for ~4 s.
+// LSI ~32 kHz / prescaler 64 -> 500 Hz; reload 2000 -> ~4 s. Refresh happens at
+// the top of the superloop and inside every long-running inner loop.
+static void kiisu_iwdg_init(void)
+{
+  LL_RCC_LSI_Enable();
+  while (!LL_RCC_LSI_IsReady()) { }
+#ifdef DEBUG
+  // Halt IWDG when CPU is stopped by debugger so single-step doesn't reset us
+  DBGMCU->APB1FZR1 |= DBGMCU_APB1FZR1_DBG_IWDG_STOP;
+#endif
+  LL_IWDG_Enable(IWDG);
+  LL_IWDG_EnableWriteAccess(IWDG);
+  LL_IWDG_SetPrescaler(IWDG, LL_IWDG_PRESCALER_64);
+  LL_IWDG_SetReloadCounter(IWDG, 2000);
+  while (LL_IWDG_IsReady(IWDG) == 0) { }
+  LL_IWDG_ReloadCounter(IWDG);
+}
+
 // Debounce and transition helpers
 static uint8_t usb_connected_prev = 0;
 static uint32_t usb_transition_ms = 0;
@@ -253,6 +274,9 @@ int main(void)
       rw_led(0,0,0);
     }
   }
+  // Arm the watchdog last — after all init paths (some of which call HAL_Delay)
+  // have completed so we don't risk an early reset during boot.
+  kiisu_iwdg_init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -261,6 +285,7 @@ int main(void)
   {
     /* USER CODE END WHILE */
     /* USER CODE BEGIN 3 */
+  LL_IWDG_ReloadCounter(IWDG);
   handle_back_button();  // Check for shutdown sequence
   // Handle delayed shutdown timer
   if (shutdown_timer_active && (int32_t)(HAL_GetTick() - shutdown_timer_deadline) >= 0) {
@@ -623,6 +648,7 @@ int main(void)
         uint32_t last_usb_poll_warning = HAL_GetTick();
   while (HAL_GetTick() - warning_start < 3000) // 3-second warning
         {
+          LL_IWDG_ReloadCounter(IWDG);
           // If USB got attached, exit warning immediately and let main loop handle charging path
           if (HAL_GetTick() - last_usb_poll_warning >= 50) { // poll USB ~20Hz
             last_usb_poll_warning = HAL_GetTick();
@@ -681,6 +707,7 @@ int main(void)
           uint32_t auto_off_start = HAL_GetTick();
           while (1) // Idle loop
           {
+            LL_IWDG_ReloadCounter(IWDG);
             // Check auto power-off timeout
             if (auto_off_ms && (HAL_GetTick() - auto_off_start) >= auto_off_ms) {
               queue_shutdown_minimal();
@@ -1437,6 +1464,7 @@ void handle_back_button(void) {
         // Flash the red led for 2 seconds and shut down.
         uint32_t shutdown_warning_start_time = HAL_GetTick();
         while (HAL_GetTick() - shutdown_warning_start_time < 2000) {
+          LL_IWDG_ReloadCounter(IWDG);
           rw_led(1, 0, 0); HAL_Delay(100);
           rw_led(0, 0, 0); HAL_Delay(100);
         }
