@@ -1499,17 +1499,18 @@ void rw_display_apply_brightness_change(uint8_t brightness) {
 
 // Jump to system memory bootloader (non-returning)
 static void jump_to_system_memory_bootloader(void) {
-  // Turn off interrupts
-  __disable_irq();
-
   // Put peripherals into a quiescent state
   LL_SPI_Disable(OLED_SPI);
   LL_SPI_Disable(COMPANION_SPI);
   LL_I2C_Disable(I2C1);
 
-  // Deinit HAL (optional for cleaner state)
+  // Deinit HAL with SysTick still alive — HAL_RCC_DeInit/HAL_DeInit poll
+  // HAL_GetTick() internally, so killing interrupts first would deadlock here.
   HAL_RCC_DeInit();
   HAL_DeInit();
+
+  // Now it is safe to mask interrupts and jump.
+  __disable_irq();
 
   // Remap system memory and jump
   // For STM32G4, system memory base is 0x1FFF0000 (reference manual)
@@ -1533,12 +1534,14 @@ void request_jump_to_application(uint32_t app_base) {
 }
 
 static void jump_to_application(uint32_t app_base) {
-  __disable_irq();
   LL_SPI_Disable(OLED_SPI);
   LL_SPI_Disable(COMPANION_SPI);
   LL_I2C_Disable(I2C1);
+  // HAL_RCC_DeInit/HAL_DeInit need SysTick alive to time out their internal
+  // wait loops, so disable interrupts only after they finish.
   HAL_RCC_DeInit();
   HAL_DeInit();
+  __disable_irq();
   typedef void (*pFunction)(void);
   uint32_t jump_address = *(__IO uint32_t*)(app_base + 4);
   pFunction JumpToApp = (pFunction)jump_address;
