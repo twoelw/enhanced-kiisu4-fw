@@ -9,12 +9,8 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.preset }}
+    name: Build Release
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        preset: [Debug, Release]
-      fail-fast: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,20 +23,20 @@ jobs:
       - name: Install Ninja
         run: sudo apt-get install -y ninja-build
 
-      - name: Configure (${{ matrix.preset }})
-        run: cmake --preset ${{ matrix.preset }}
+      - name: Configure
+        run: cmake --preset Release
 
-      - name: Build (${{ matrix.preset }})
-        run: cmake --build build/${{ matrix.preset }}
+      - name: Build
+        run: cmake --build build/Release
 
       - name: Report image size
-        run: arm-none-eabi-size build/${{ matrix.preset }}/KiisuCompanion.elf
+        run: arm-none-eabi-size build/Release/KiisuCompanion.elf
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: KiisuCompanion-${{ matrix.preset }}
+          name: KiisuCompanion-Release
           path: |
-            build/${{ matrix.preset }}/KiisuCompanion.elf
-            build/${{ matrix.preset }}/KiisuCompanion.bin
+            build/Release/KiisuCompanion.elf
+            build/Release/KiisuCompanion.bin
           if-no-files-found: error
