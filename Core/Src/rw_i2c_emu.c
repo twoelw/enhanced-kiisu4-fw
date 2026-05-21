@@ -63,10 +63,14 @@ extern void queue_bootloader_request(void);
 void queue_shutdown_after(uint32_t delay_ms);
 void request_jump_to_application(uint32_t app_base);
 
-uint8_t i2c_55[256];
-uint8_t i2c_6b[256];
-uint8_t i2c_30[256];
-uint8_t i2c_31[256]; // settings
+// Emulated register banks. Writes happen in the I2C1_EV ISR
+// (rw_i2c_reg_written), reads happen from the main loop and from rw_i2c_get_reg
+// (also called from the ISR). Declared volatile so GCC -O3 cannot hoist or
+// elide reads of state that the ISR mutates.
+volatile uint8_t i2c_55[256];
+volatile uint8_t i2c_6b[256];
+volatile uint8_t i2c_30[256];
+volatile uint8_t i2c_31[256]; // settings
 
 // ===== Firmware update state (addr 0x30) =====
 // Register map constants
@@ -185,7 +189,7 @@ static void __attribute__((section(".ramfunc"), noinline)) ram_copy_down(uint32_
 }
 
 // CRC16/X25: poly 0x1021 (reflected 0x8408), init 0xFFFF, refin=true, refout=true, xorout=0xFFFF
-static uint16_t crc16_x25(const uint8_t* data, uint32_t len)
+static uint16_t crc16_x25(const volatile uint8_t* data, uint32_t len)
 {
   uint16_t crc = 0xFFFF;
   for (uint32_t i = 0; i < len; ++i) {
@@ -198,7 +202,7 @@ static uint16_t crc16_x25(const uint8_t* data, uint32_t len)
 }
 
 // CRC32 (IEEE) for rolling
-static uint32_t crc32_step(uint32_t crc, const uint8_t* data, uint32_t len)
+static uint32_t crc32_step(uint32_t crc, const volatile uint8_t* data, uint32_t len)
 {
   crc = ~crc;
   for (uint32_t i = 0; i < len; ++i) {
@@ -209,11 +213,11 @@ static uint32_t crc32_step(uint32_t crc, const uint8_t* data, uint32_t len)
   return ~crc;
 }
 
-static inline uint32_t u32_from_regs(uint8_t* base, uint8_t idx0)
+static inline uint32_t u32_from_regs(volatile uint8_t* base, uint8_t idx0)
 {
   return (uint32_t)base[idx0] | ((uint32_t)base[idx0+1] << 8) | ((uint32_t)base[idx0+2] << 16) | ((uint32_t)base[idx0+3] << 24);
 }
-static inline void u32_to_regs(uint8_t* base, uint8_t idx0, uint32_t v)
+static inline void u32_to_regs(volatile uint8_t* base, uint8_t idx0, uint32_t v)
 {
   base[idx0] = (uint8_t)(v & 0xFF);
   base[idx0+1] = (uint8_t)((v >> 8) & 0xFF);
@@ -442,7 +446,7 @@ void addr_55_written(uint8_t reg, uint8_t value)
   }
 }
 
-void int_to_array(uint8_t arr[], uint8_t index, int16_t value) 
+void int_to_array(volatile uint8_t arr[], uint8_t index, int16_t value)
 {
   arr[index+1] = (value >> 8) & 0xFF; // High byte
   arr[index] = value & 0xFF;    // Low byte

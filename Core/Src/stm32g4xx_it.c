@@ -58,10 +58,12 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-uint8_t i2c_address = 0;
-uint8_t i2c_direction = 0;
-uint8_t i2c_pointer = 0;
-uint8_t i2c_register = 0;
+// Shared between I2C1_EV and I2C1_ER handlers; declare volatile so GCC under
+// -O3 won't cache reads from main-loop helpers that observe slave framing.
+volatile uint8_t i2c_address = 0;
+volatile uint8_t i2c_direction = 0;
+volatile uint8_t i2c_pointer = 0;
+volatile uint8_t i2c_register = 0;
 
 // Diagnostics for I2C1 error IRQ — read via SWD on a running unit to see what's
 // actually happening on the bus. Per-flag counts let us separate "OVR (race with
