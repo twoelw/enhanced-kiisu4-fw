@@ -19,9 +19,9 @@
     <ToolchainID>
       <ID>com.visualgdb.arm-eabi</ID>
       <Version>
-        <GCC>14.2.1</GCC>
+        <GCC>15.2.1</GCC>
         <GDB>15.2</GDB>
-        <Revision>2</Revision>
+        <Revision>1</Revision>
       </Version>
     </ToolchainID>
     <RelativeSourceDirectory />

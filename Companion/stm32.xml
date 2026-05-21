@@ -2,9 +2,9 @@
 <EmbeddedProfile xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ToolchainID>com.visualgdb.arm-eabi</ToolchainID>
   <ToolchainVersion>
-    <GCC>14.2.1</GCC>
+    <GCC>15.2.1</GCC>
     <GDB>15.2</GDB>
-    <Revision>2</Revision>
+    <Revision>1</Revision>
   </ToolchainVersion>
   <BspID>com.sysprogs.arm.stm32</BspID>
   <BspVersion>2025.06</BspVersion>
