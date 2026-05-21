@@ -767,9 +767,10 @@ int main(void)
     led_pwm_disable();
     // Hard quiet: disable both SPI peripherals and their IRQs once during update
     if (!update_quiet_hard_applied) {
-      // Disable SPI2 (OLED) first to avoid display bus traffic
+      // Disable SPI2 (OLED) first to avoid display bus traffic.
+      // SPI2_IRQn is never enabled in primary init, so don't touch it here —
+      // toggling it without a SPI2_IRQHandler would route OVR/MODF to Default_Handler.
       LL_SPI_Disable(OLED_SPI);
-      NVIC_DisableIRQ(SPI2_IRQn);
       // Disable SPI1 (Companion) to avoid any RX IRQs while flashing
       LL_SPI_Disable(COMPANION_SPI);
       NVIC_DisableIRQ(SPI1_IRQn);
@@ -780,7 +781,6 @@ int main(void)
     // Optional: if quiet clears (e.g., aborted), re-enable SPI peripherals
     NVIC_EnableIRQ(SPI1_IRQn);
     LL_SPI_Enable(COMPANION_SPI);
-    NVIC_EnableIRQ(SPI2_IRQn);
     LL_SPI_Enable(OLED_SPI);
     update_quiet_hard_applied = 0;
   }

@@ -63,6 +63,17 @@ uint8_t i2c_direction = 0;
 uint8_t i2c_pointer = 0;
 uint8_t i2c_register = 0;
 
+// Diagnostics for I2C1 error IRQ — read via SWD on a running unit to see what's
+// actually happening on the bus. Per-flag counts let us separate "OVR (race with
+// SPI1 IRQ preempting I2C_EV)" from "BERR (electrical / bus integrity)" etc.
+volatile uint32_t i2c1_er_count        = 0; // total entries into the handler
+volatile uint32_t i2c1_er_last_isr     = 0; // snapshot of I2C1->ISR on last entry
+volatile uint32_t i2c1_er_berr_cnt     = 0; // Bus Error
+volatile uint32_t i2c1_er_arlo_cnt     = 0; // Arbitration Lost (shouldn't happen on slave)
+volatile uint32_t i2c1_er_ovr_cnt      = 0; // Overrun/Underrun — RXNE not serviced in time
+volatile uint32_t i2c1_er_pec_cnt      = 0; // SMBus PEC (we don't use SMBus)
+volatile uint32_t i2c1_er_timeout_cnt  = 0; // SMBus timeout
+volatile uint32_t i2c1_er_alert_cnt    = 0; // SMBus alert
 
 /* USER CODE END 0 */
 
@@ -349,6 +360,34 @@ void SPI1_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+
+// I2C1 error interrupt. NVIC for this vector is enabled in main.c, so without
+// this handler any BERR/ARLO/OVR/PECERR/TIMEOUT/ALERT flag would route to the
+// startup file's Default_Handler (Infinite_Loop) and lock the MCU forever — the
+// April 2026 hang root cause. Recovery: clear error flags AND reset the I2C
+// state machine via PE=0 -> PE=1 (RM0440 recommended path), since simply
+// clearing flags leaves the slave clamping SCL/SDA after a mid-transaction error.
+void I2C1_ER_IRQHandler(void)
+{
+  uint32_t isr = I2C1->ISR;
+  i2c1_er_last_isr = isr;
+  i2c1_er_count++;
+  if (isr & I2C_ISR_BERR)    i2c1_er_berr_cnt++;
+  if (isr & I2C_ISR_ARLO)    i2c1_er_arlo_cnt++;
+  if (isr & I2C_ISR_OVR)     i2c1_er_ovr_cnt++;
+  if (isr & I2C_ISR_PECERR)  i2c1_er_pec_cnt++;
+  if (isr & I2C_ISR_TIMEOUT) i2c1_er_timeout_cnt++;
+  if (isr & I2C_ISR_ALERT)   i2c1_er_alert_cnt++;
+  // Clear every error flag the peripheral can raise into this vector.
+  I2C1->ICR = I2C_ICR_BERRCF | I2C_ICR_ARLOCF | I2C_ICR_OVRCF |
+              I2C_ICR_PECCF  | I2C_ICR_TIMOUTCF | I2C_ICR_ALERTCF;
+  // Reset peripheral state machine to release a hung bus.
+  CLEAR_BIT(I2C1->CR1, I2C_CR1_PE);
+  __NOP(); __NOP(); __NOP(); __NOP();
+  SET_BIT(I2C1->CR1, I2C_CR1_PE);
+  // Reset slave-side framing variables so the next ADDR match starts clean.
+  i2c_pointer = 0;
+}
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
