@@ -73,12 +73,12 @@ add_custom_command(
     BYPRODUCTS ${CMAKE_PROJECT_NAME}.bin
     DEPENDS ${CMAKE_PROJECT_NAME}
     COMMENT "generate .bin file"
-    COMMAND ${CMAKE_OBJCOPY} -O binary "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>" "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>.bin"
+    COMMAND ${CMAKE_OBJCOPY} -O binary "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>" "${CMAKE_PROJECT_NAME}.bin"
     VERBATIM
 )
 
 add_custom_target(
     flash
     DEPENDS ${CMAKE_PROJECT_NAME}.bin
-    COMMAND st-flash --reset write  "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>.bin" 0x08000000
+    COMMAND st-flash --reset write  "${CMAKE_PROJECT_NAME}.bin" 0x08000000
 )
