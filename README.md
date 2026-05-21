@@ -14,21 +14,21 @@ To provide compatibility with Flipper Zero Firmwares on Kiisu development boards
 
 ## Building
 
-Two options, both produce identical firmware (`KiisuCompanion.elf` + `KiisuCompanion.bin`).
+Use the **Release** preset for any firmware that will actually run on hardware — the Debug preset is too slow to keep up with the host MCU's SPI display stream.
 
 ### From the command line (CMake + arm-none-eabi-gcc)
 
 Requires `arm-none-eabi-gcc` (tested with 14.2.Rel1 and 15.2.Rel1), `cmake` (>= 3.22) and `ninja`.
 
 ```sh
-cmake --preset Debug              # or Release
-cmake --build build/Debug         # or build/Release
+cmake --preset Release
+cmake --build build/Release
 ```
 
 The post-build step produces a `.bin` next to the `.elf`. To flash via ST-Link:
 
 ```sh
-cmake --build build/Debug --target flash
+cmake --build build/Release --target flash
 ```
 
 ### From VisualGDB
@@ -37,7 +37,7 @@ Open `Companion/KiisuCompanion.sln`; the project drives the same CMake configura
 
 ### Prebuilt binaries
 
-Every push to `main` and every pull request triggers a CI build of both `Debug` and `Release` presets. Artifacts (`.elf` + `.bin`) are attached to each run — see the [Actions tab](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml).
+Every push to `main` and every pull request triggers a CI Release build. Artifacts (`.elf` + `.bin`) are attached to each run — see the [Actions tab](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml).
 
 ## Flashing via Kiisu Companion Bridge
 
