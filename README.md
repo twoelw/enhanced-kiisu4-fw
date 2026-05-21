@@ -4,6 +4,28 @@
 
 To provide compatibility with Flipper Zero Firmwares on Kiisu development boards.
 
+## Flashing via Kiisu Companion Bridge
+
+The easiest method for end users — no SWD programmer or USB adapter required. The Bridge app is shipped inside the Kiisu fork of the Flipper Zero firmware ([kiisu-io/kiisu-firmware](https://github.com/kiisu-io/kiisu-firmware)). Standalone upstream sources live at [twoelw/kiisu-companion-bridge](https://github.com/twoelw/kiisu-companion-bridge).
+
+**Requirements:** Kiisu V4a/V4b produced from 1 September 2025 or later.
+
+**Steps:**
+
+1. Copy the desired `KiisuCompanion.bin` to the device's SD card. You can either build it locally (`build/Release/KiisuCompanion.bin`) or download the latest CI artifact from the [Actions tab](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml).
+2. On the Kiisu, navigate to: **[OK] → Apps → Kiisu → Kiisu Companion Bridge**.
+3. Choose **Select BIN file** and pick the `.bin` you copied.
+4. The update takes a while. Wait for **both** the audible beep **and** the on-screen success message.
+
+> ⚠️ **Do not remove the battery or unplug USB before the beep.** The companion MCU's flash is being rewritten and interrupting power mid-write will leave the device in a non-bootable state recoverable only via SWD.
+>
+> If you heard the beep but the success message never appeared, it is safe to power-cycle the device (remove battery and USB, then reinsert) — the flash write has already completed.
+
+## Flashing via SWD or USB interface
+
+* This method will work always, but you need to make or buy SWD programmer or USB adapter.
+* Get manual for your board here: https://github.com/kiisu-io/kiisu4 and follow the instructions.
+
 ## Status
 
 * Display init & data transfer - working
@@ -38,28 +60,6 @@ Open `Companion/KiisuCompanion.sln`; the project drives the same CMake configura
 ### Prebuilt binaries
 
 Every push to `main` and every pull request triggers a CI Release build. Artifacts (`.elf` + `.bin`) are attached to each run — see the [Actions tab](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml).
-
-## Flashing via Kiisu Companion Bridge
-
-The easiest method for end users — no SWD programmer or USB adapter required. The Bridge app is shipped inside the Kiisu fork of the Flipper Zero firmware ([kiisu-io/kiisu-firmware](https://github.com/kiisu-io/kiisu-firmware)). Standalone upstream sources live at [twoelw/kiisu-companion-bridge](https://github.com/twoelw/kiisu-companion-bridge).
-
-**Requirements:** Kiisu V4a/V4b produced from 1 September 2025 or later.
-
-**Steps:**
-
-1. Copy the desired `KiisuCompanion.bin` to the device's SD card. You can either build it locally (`build/Release/KiisuCompanion.bin`) or download the latest CI artifact from the [Actions tab](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml).
-2. On the Kiisu, navigate to: **[OK] → Apps → Kiisu → Kiisu Companion Bridge**.
-3. Choose **Select BIN file** and pick the `.bin` you copied.
-4. The update takes a while. Wait for **both** the audible beep **and** the on-screen success message.
-
-> ⚠️ **Do not remove the battery or unplug USB before the beep.** The companion MCU's flash is being rewritten and interrupting power mid-write will leave the device in a non-bootable state recoverable only via SWD.
->
-> If you heard the beep but the success message never appeared, it is safe to power-cycle the device (remove battery and USB, then reinsert) — the flash write has already completed.
-
-## Flashing via SWD or USB interface
-
-* This method will work always, but you need to make or buy SWD programmer or USB adapter.
-* Get manual for your board here: https://github.com/kiisu-io/kiisu4 and follow the instructions.
 
 ## Other resources
 
