@@ -1,4 +1,4 @@
-# Kiisu V4a/V4b companion firmware
+# Kiisu V4B/V4BR companion firmware
 
 [![Build firmware](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml)
 
