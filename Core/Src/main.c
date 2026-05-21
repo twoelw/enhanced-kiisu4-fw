@@ -1559,11 +1559,15 @@ static void jump_to_application(uint32_t app_base) {
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
+  /* If a debugger is attached, halt here so the cause can be inspected.
+     In the field, recover by resetting — IWDG would do it after ~4 s anyway,
+     but during those seconds the host's I2C reads would NACK and confuse it. */
+  if (CoreDebug->DHCSR & CoreDebug_DHCSR_C_DEBUGEN_Msk) {
+    __disable_irq();
+    while (1) { }
   }
+  __DSB();
+  NVIC_SystemReset();
   /* USER CODE END Error_Handler_Debug */
 }
 
