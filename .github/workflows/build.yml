@@ -18,7 +18,7 @@ jobs:
       - name: Install ARM GCC toolchain
         uses: carlosperate/arm-none-eabi-gcc-action@v1
         with:
-          release: '14.2.Rel1'
+          release: '15.2.Rel1'
 
       - name: Install Ninja
         run: sudo apt-get install -y ninja-build

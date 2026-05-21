@@ -18,7 +18,7 @@ Use the **Release** preset for any firmware that will actually run on hardware â
 
 ### From the command line (CMake + arm-none-eabi-gcc)
 
-Requires `arm-none-eabi-gcc` (tested with 14.2.Rel1 and 15.2.Rel1), `cmake` (>= 3.22) and `ninja`.
+Requires `arm-none-eabi-gcc` 15.2.Rel1 (the version pinned in CI), `cmake` (>= 3.22) and `ninja`.
 
 ```sh
 cmake --preset Release
