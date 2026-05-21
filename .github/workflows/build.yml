@@ -1,0 +1,46 @@
+name: Build firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.preset }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        preset: [Debug, Release]
+      fail-fast: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ARM GCC toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '14.2.Rel1'
+
+      - name: Install Ninja
+        run: sudo apt-get install -y ninja-build
+
+      - name: Configure (${{ matrix.preset }})
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build (${{ matrix.preset }})
+        run: cmake --build build/${{ matrix.preset }}
+
+      - name: Report image size
+        run: arm-none-eabi-size build/${{ matrix.preset }}/KiisuCompanion.elf
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: KiisuCompanion-${{ matrix.preset }}
+          path: |
+            build/${{ matrix.preset }}/KiisuCompanion.elf
+            build/${{ matrix.preset }}/KiisuCompanion.bin
+          if-no-files-found: error
