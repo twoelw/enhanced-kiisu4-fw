@@ -12,7 +12,7 @@ The easiest method for end users — no SWD programmer or USB adapter required. 
 
 **Steps:**
 
-1. Copy the desired `KiisuCompanion.bin` to the device's SD card. You can either build it locally (`build/Release/KiisuCompanion.bin`) or download the latest CI artifact from the [Actions tab](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml).
+1. Get a `KiisuCompanion.bin` and copy it to the device's SD card. The easiest source is the rolling [Latest release](https://github.com/kiisu-io/kiisu4-companion-fw/releases/latest) — automatically rebuilt from `main`, no GitHub login needed. Alternatively, build it locally (`build/Release/KiisuCompanion.bin`).
 2. On the Kiisu, navigate to: **[OK] → Apps → Kiisu → Kiisu Companion Bridge**.
 3. Choose **Select BIN file** and pick the `.bin` you copied.
 4. The update takes a while. Wait for **both** the audible beep **and** the on-screen success message.
@@ -59,7 +59,7 @@ Open `Companion/KiisuCompanion.sln`; the project drives the same CMake configura
 
 ### Prebuilt binaries
 
-Every push to `main` and every pull request triggers a CI Release build. Artifacts (`.elf` + `.bin`) are attached to each run — see the [Actions tab](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml).
+Every push to `main` publishes the resulting `.elf` and `.bin` to the rolling [Latest release](https://github.com/kiisu-io/kiisu4-companion-fw/releases/latest) — public, no login required. Per-run artifacts (including PR builds) are also available under the [Actions tab](https://github.com/kiisu-io/kiisu4-companion-fw/actions/workflows/build.yml) for 90 days.
 
 ## Other resources
 

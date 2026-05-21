@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build Release
@@ -32,7 +35,7 @@ jobs:
       - name: Report image size
         run: arm-none-eabi-size build/Release/KiisuCompanion.elf
 
-      - name: Upload firmware artifacts
+      - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: KiisuCompanion-Release
@@ -40,3 +43,21 @@ jobs:
             build/Release/KiisuCompanion.elf
             build/Release/KiisuCompanion.bin
           if-no-files-found: error
+
+      - name: Publish rolling "latest" release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build (main)
+          body: |
+            Automatically updated on every push to `main`.
+
+            - Commit: ${{ github.sha }}
+            - Built with arm-none-eabi-gcc 15.2.Rel1, Release preset
+            - Flash `KiisuCompanion.bin` via Kiisu Companion Bridge (see README).
+          files: |
+            build/Release/KiisuCompanion.elf
+            build/Release/KiisuCompanion.bin
+          make_latest: 'true'
+          prerelease: false
