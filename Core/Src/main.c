@@ -252,6 +252,9 @@ int main(void)
   rw_powerswitch(1);
   HAL_Delay(200);
   rw_display_init();
+  // Hold the build-timestamp banner long enough to be readable before host
+  // firmware starts pushing display data.
+  HAL_Delay(1000);
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
   led_pwm_init();
   led_pwm_enable_timer_mode();

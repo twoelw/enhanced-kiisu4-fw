@@ -115,7 +115,13 @@ void rw_display_init(void)
   rw_display_drawing_start();
   rw_sh1106_fill(0);
   rw_sh1106_setposition(0, 0);
-  rw_sh1106_print("Kiisu is starting...");
+  rw_sh1106_print("Kiisu is starting...\n");
+  rw_sh1106_print((char *)("Kiisu Companion\n"
+                           "\n"
+                           "Build:\n"
+                           __DATE__ "\n"
+                           __TIME__));
+  rw_sh1106_setposition(0, 0);
   rw_display_drawing_end();
 }
 
