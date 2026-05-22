@@ -470,8 +470,14 @@ void addr_55_written(uint8_t reg, uint8_t value)
 
 void int_to_array(volatile uint8_t arr[], uint8_t index, int16_t value)
 {
+  // Write low byte first, then high byte. If the I2C ISR preempts mid-update
+  // and the host happens to read this register pair, the torn value will be
+  // (new_low + old_high) or (new_low + new_high) — both close to old/new,
+  // never a wild "new_high + old_low" combination that can look like a
+  // catastrophically wrong voltage. Callers that need full atomicity should
+  // wrap multiple int_to_array() invocations in __disable_irq/__enable_irq.
+  arr[index]   = value & 0xFF;        // Low byte
   arr[index+1] = (value >> 8) & 0xFF; // High byte
-  arr[index] = value & 0xFF;    // Low byte
 }
 
 void rw_i2c_emu_init()
@@ -524,8 +530,14 @@ void rw_i2c_emu_init()
   i2c_31[0x03] = settings_get_charge_rainbow_raw();
 }
 
-void rw_i2c_set_battery(int16_t vbatt,int16_t vusb,int16_t current, uint8_t charge_state) 
+void rw_i2c_set_battery(int16_t vbatt,int16_t vusb,int16_t current, uint8_t charge_state)
 {
+  // Mask I2C IRQ briefly so the multi-byte battery fields update atomically.
+  // Without this, the host can read torn values between high and low bytes
+  // (e.g. new_high + old_low of voltage), which the Flipper-side battery
+  // monitor interprets as a momentary low-voltage and briefly flashes a
+  // "Battery is low" warning.
+  __disable_irq();
   if (charge_state == 0)
   {
     i2c_55[0x0A] = 0b00111011; // 1 bit - set when discarging
@@ -533,17 +545,18 @@ void rw_i2c_set_battery(int16_t vbatt,int16_t vusb,int16_t current, uint8_t char
   }
   else if (charge_state == 1)
   {
-    i2c_55[0x0A] = 0b00111010; 
+    i2c_55[0x0A] = 0b00111010;
     i2c_6b[0x0B] = 0b00110110; // charging
   }
   else if (charge_state == 2)
   {
-    i2c_55[0x0A] = 0b00111110; // 
+    i2c_55[0x0A] = 0b00111110; //
     i2c_6b[0x0B] = 0b00111110; // charged
   }
   int_to_array(i2c_55, 0x08, vbatt); // voltage
   int_to_array(i2c_55, 0x0C, current);   // current
-  int_to_array(i2c_55, 0x2C, (vbatt-3200)*100/(4200-3200));   // charge percentage 
+  int_to_array(i2c_55, 0x2C, (vbatt-3200)*100/(4200-3200));   // charge percentage
+  __enable_irq();
 }
 
 void rw_i2c_reg_written(uint8_t address, uint8_t reg, uint8_t value)
